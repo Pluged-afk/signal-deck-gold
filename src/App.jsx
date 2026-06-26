@@ -415,19 +415,26 @@ COT — CFTC Managed Money (hedge funds, published weekly)
         const res=await fetch("https://api.anthropic.com/v1/messages",{
           method:"POST",
           headers:{"Content-Type":"application/json","x-api-key":keys.anthropic,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-          body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:2000,system:SYSTEM,tools,messages:history})
+          body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:4096,system:SYSTEM,tools,messages:history})
         });
         if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e?.error?.message||`API error ${res.status}`);}
         const data=await res.json();
-        const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
-        if(texts) finalText=texts;
-        if(data.stop_reason==="end_turn") break;
+        if(data.stop_reason==="end_turn"){
+          const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+          if(texts) finalText=texts;
+          break;
+        }
         history.push({role:"assistant",content:data.content});
         if(data.stop_reason==="tool_use"){
           addLog("AI searching web...");
           const results=(data.content||[]).filter(b=>b.type==="tool_use").map(b=>({type:"tool_result",tool_use_id:b.id,content:"Search executed."}));
           if(results.length) history.push({role:"user",content:results}); else break;
-        } else break;
+        } else {
+          // unexpected stop — grab any text and bail
+          const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+          if(texts) finalText=texts;
+          break;
+        }
       }
 
       const parsed=parseJSON(finalText);
