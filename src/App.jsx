@@ -75,38 +75,58 @@ function AccessGate({ onUnlock }) {
   );
 }
 
-// ─── SYSTEM PROMPT ───────────────────────────────────────────────────────────
+// ─── ROOT EXPORT ─────────────────────────────────────────────────────────────
+export default function App() {
+  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
+  if (!unlocked) return <AccessGate onUnlock={() => setUnlocked(true)} />;
+  return <SignalDeckGold />;
+}
+
+// ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
 const SYSTEM = `You are SIGNAL DECK GOLD, an XAU/USD analysis engine for paper trading education only. Not financial advice. Never fabricate prices.
 
-ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, DXY, or real yield. These are calculated from real API data.
+ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, VWAP, volume, DXY, real yield, or COT. These are calculated from real API data.
 
-YOUR JOB (use web search for these only):
-1. NEWS: Search top gold market news last 24h. Fed commentary, inflation data, geopolitical risk, ETF flows (GLD, IAU), VIX level. Bloomberg/Reuters preferred.
-2. KEY LEVELS: Search nearest major XAU/USD support and resistance levels used by institutions. Confirm or refine the provided S/R with your search.
-3. MACRO CONTEXT: Any FOMC/CPI/NFP/PCE within 48h? Fed speaker schedule today? Any geopolitical risk events?
-4. BIAS SYNTHESIS: Given ALL the pre-computed data + your news/levels research, determine the highest-probability directional bias.
+YOUR JOB (web search only for these):
+1. NEWS: Top gold market news last 24h. Fed commentary, inflation, geopolitical risk, ETF flows (GLD/IAU), VIX. Bloomberg/Reuters preferred.
+2. KEY LEVELS: Nearest major XAU/USD institutional support/resistance. Confirm or refine the provided S/R.
+3. MACRO CONTEXT: FOMC/CPI/NFP/PCE within 48h? Fed speakers today? Geopolitical events?
+4. BIAS SYNTHESIS: All pre-computed data + research → highest-probability directional bias.
+
+8-STEP SCORECARD RULES:
+1. PRICE & VWAP: Upper/lower third of 24h range AND above/below VWAP → same direction = PASS.
+2. MACD MULTI-TF: 1h+4h+Daily all above signal = PASS LONG. All below = PASS SHORT. 2/3 = NEUTRAL. 1/3 or 0/3 = FAIL.
+3. RSI + 200MA: RSI 50-70 + price above 200MA = PASS LONG. RSI 30-50 + below 200MA = PASS SHORT. Extremes (>70 or <30) = NEUTRAL for entry.
+4. VOLUME: Ratio >1.5x avg = PASS (confirms). 0.8-1.5x = NEUTRAL. <0.8x = FAIL (weak move).
+5. DXY + REAL YIELD: Both falling = PASS LONG. Both rising = PASS SHORT. Conflict = NEUTRAL.
+6. COT: Net MM <100k = room for longs = PASS LONG. Net >200k = crowded = FAIL LONG/PASS SHORT. 100-200k = NEUTRAL.
+7. LEVELS: Price within 0.3% of key structural support (LONG) or resistance (SHORT) = PASS. Middle of range = FAIL.
+8. NEWS: Confirmed bullish catalyst = PASS. Bearish = FAIL. Unclear = NEUTRAL.
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/NFP/PCE) within 24h → WAIT, no exceptions
-- ≥4 of 6 scorecard items confirm same direction → LONG or SHORT. <4 = WAIT
-- DXY and real yield must agree for HIGH confidence — conflict caps at MEDIUM
-- Entry: current price or pullback to nearest S/R within 0.3%
-- Stop: ATR-based stop provided — use it. Do not invent a different stop.
-- T1: next structural level, min 1.5× ATR from entry. T2: min 2.5× ATR from entry.
-- R:R < 1:2 → WAIT
-- Session filter: OFF-PEAK (Asia/weekend) with no strong catalyst → cap confidence at MEDIUM
+- ≥5 of 8 confirm same direction → LONG or SHORT. <5 = WAIT
+- Three-timeframe MACD alignment is a strong standalone signal — weight it heavily
+- DXY and yield conflict → confidence capped at MEDIUM
+- Low volume breakout → confidence capped at MEDIUM
+- COT net >200k + price at resistance = high-probability SHORT
+- Stop: use the ATR-based value provided. Do not widen it.
+- T1: min 1.5× ATR from entry. T2: min 2.5× ATR. R:R <1:2 → WAIT
+- Off-peak session + no strong catalyst → cap confidence at MEDIUM
 
-Respond ONLY with a valid JSON object. No markdown, no text before or after:
-{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX — falling","real_yield":"X.XX% — falling","passes":4,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"}},"reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief caveat or empty","sources":["url1"]}`;
+Respond ONLY with valid JSON, no markdown, no text outside it:
+{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"}},"reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`;
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const SC_ROWS = [
-  { key:"price",     label:"1. Price & Range"    },
-  { key:"macd",      label:"2. MACD 1h/4h"       },
-  { key:"rsi_ma",    label:"3. RSI + 200MA"      },
-  { key:"dxy_yield", label:"4. DXY + Real Yield" },
-  { key:"history",   label:"5. Levels / Context" },
-  { key:"news",      label:"6. News / Macro"     },
+  { key:"price",     label:"1. Price & VWAP"       },
+  { key:"macd",      label:"2. MACD 1h/4h/Daily"   },
+  { key:"rsi_ma",    label:"3. RSI + 200MA"         },
+  { key:"volume",    label:"4. Volume Confirmation" },
+  { key:"dxy_yield", label:"5. DXY + Real Yield"   },
+  { key:"cot",       label:"6. COT Positioning"     },
+  { key:"history",   label:"7. Levels / Context"    },
+  { key:"news",      label:"8. News / Macro"        },
 ];
 
 const mono = { fontFamily:"'JetBrains Mono','Fira Code','Courier New',monospace", fontWeight:500 };
@@ -135,13 +155,13 @@ const getSession = () => {
 };
 
 const parseJSON = raw => {
-  const clean = raw.replace(/```[a-z]*\n?/gi,"").trim();
-  const start = clean.indexOf("{"); if(start===-1) return null;
-  const end   = clean.lastIndexOf("}");
+  const clean=raw.replace(/```[a-z]*\n?/gi,"").trim();
+  const start=clean.indexOf("{"); if(start===-1) return null;
+  const end=clean.lastIndexOf("}");
   if(end>start){ try{ return JSON.parse(clean.substring(start,end+1)); }catch(_){} }
-  let s = clean.substring(start);
+  let s=clean.substring(start);
   try{ return JSON.parse(s); }catch(_){}
-  s = s.replace(/,?\s*"[^"]*$/,"").replace(/,?\s*[\w.]*$/,"");
+  s=s.replace(/,?\s*"[^"]*$/,"").replace(/,?\s*[\w.]*$/,"");
   const oA=(s.match(/\[/g)||[]).length-(s.match(/\]/g)||[]).length;
   for(let i=0;i<oA;i++) s+="]";
   const oO=(s.match(/\{/g)||[]).length-(s.match(/\}/g)||[]).length;
@@ -149,62 +169,61 @@ const parseJSON = raw => {
   try{ return JSON.parse(s); }catch(_){ return null; }
 };
 
-// ─── TECHNICAL CALCULATIONS ───────────────────────────────────────────────────
+// ─── Technical calculations ───────────────────────────────────────────────────
 const calcEMA = (values, period) => {
-  const k = 2/(period+1);
-  let ema = values.slice(0,period).reduce((a,b)=>a+b,0)/period;
-  const result = new Array(period-1).fill(null);
-  result.push(ema);
-  for(let i=period;i<values.length;i++){ ema=values[i]*k+ema*(1-k); result.push(ema); }
-  return result;
+  const k=2/(period+1);
+  let ema=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  const r=new Array(period-1).fill(null); r.push(ema);
+  for(let i=period;i<values.length;i++){ ema=values[i]*k+ema*(1-k); r.push(ema); }
+  return r;
 };
-
 const calcMACD = closes => {
-  const ema12=calcEMA(closes,12), ema26=calcEMA(closes,26);
-  const macdLine=ema12.map((v,i)=>(v&&ema26[i])?v-ema26[i]:null);
-  const validMacd=macdLine.filter(Boolean);
-  const signal=calcEMA(validMacd,9);
-  const last=macdLine.filter(Boolean).slice(-1)[0];
-  const sig9=signal.slice(-1)[0];
-  const prev=macdLine.filter(Boolean).slice(-2)[0];
-  const prevS=signal.slice(-2)[0];
-  const hist=last-sig9, prevH=prev-prevS;
-  return { macd:last, signal:sig9, histogram:hist, prevHistogram:prevH,
-           aboveSignal:last>sig9, expanding:Math.abs(hist)>Math.abs(prevH) };
+  const e12=calcEMA(closes,12), e26=calcEMA(closes,26);
+  const ml=e12.map((v,i)=>(v&&e26[i])?v-e26[i]:null);
+  const valid=ml.filter(Boolean);
+  const sig=calcEMA(valid,9);
+  const last=valid.slice(-1)[0], s9=sig.slice(-1)[0];
+  const prev=valid.slice(-2)[0], ps=sig.slice(-2)[0];
+  const hist=last-s9, ph=prev-ps;
+  return { macd:last, signal:s9, histogram:hist, aboveSignal:last>s9, expanding:Math.abs(hist)>Math.abs(ph) };
 };
-
 const calcRSI = (closes, period=14) => {
-  let gains=0, losses=0;
-  for(let i=1;i<=period;i++){ const d=closes[i]-closes[i-1]; if(d>0) gains+=d; else losses-=d; }
-  let avgG=gains/period, avgL=losses/period;
+  let g=0, l=0;
+  for(let i=1;i<=period;i++){ const d=closes[i]-closes[i-1]; if(d>0) g+=d; else l-=d; }
+  let ag=g/period, al=l/period;
   for(let i=period+1;i<closes.length;i++){
     const d=closes[i]-closes[i-1];
-    avgG=(avgG*(period-1)+(d>0?d:0))/period;
-    avgL=(avgL*(period-1)+(d<0?-d:0))/period;
+    ag=(ag*(period-1)+(d>0?d:0))/period;
+    al=(al*(period-1)+(d<0?-d:0))/period;
   }
-  const rs=avgG/avgL;
-  return avgL===0?100:100-(100/(1+rs));
+  return al===0?100:100-(100/(1+ag/al));
 };
-
 const calcATR = (highs, lows, closes, period=14) => {
   const trs=[];
   for(let i=1;i<highs.length;i++)
     trs.push(Math.max(highs[i]-lows[i],Math.abs(highs[i]-closes[i-1]),Math.abs(lows[i]-closes[i-1])));
   return trs.slice(-period).reduce((a,b)=>a+b,0)/period;
 };
-
 const calcSMA = (values, period) => {
-  const slice=values.slice(-period);
-  return slice.length===period ? slice.reduce((a,b)=>a+b,0)/period : null;
+  const s=values.slice(-period);
+  return s.length===period ? s.reduce((a,b)=>a+b,0)/period : null;
+};
+const calcVWAP = (highs, lows, closes, volumes) => {
+  let cumTPV=0, cumVol=0;
+  for(let i=0;i<closes.length;i++){
+    const tp=(highs[i]+lows[i]+closes[i])/3;
+    cumTPV+=tp*(volumes[i]||0); cumVol+=(volumes[i]||0);
+  }
+  return cumVol>0 ? cumTPV/cumVol : null;
+};
+const calcVolRatio = (volumes, period=20) => {
+  if(volumes.length<period+1) return null;
+  const avg=volumes.slice(-period-1,-1).reduce((a,b)=>a+b,0)/period;
+  const cur=volumes[volumes.length-1];
+  return avg>0 ? { current:cur, average:avg, ratio:cur/avg } : null;
 };
 
-// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function App() {
-  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
-  if (!unlocked) return <AccessGate onUnlock={() => setUnlocked(true)} />;
-  return <SignalDeckGold />;
-}
-
+// ─── Main component ───────────────────────────────────────────────────────────
 function SignalDeckGold() {
   const [keys,    setKeys]    = useState({ anthropic:"", td:"", fred:"" });
   const [tmpKeys, setTmpKeys] = useState({ anthropic:"", td:"", fred:"" });
@@ -218,188 +237,216 @@ function SignalDeckGold() {
   const logRef = useRef([]);
 
   const addLog = msg => {
-    logRef.current = [...logRef.current, `[${new Date().toLocaleTimeString()}] ${msg}`];
+    logRef.current=[...logRef.current,`[${new Date().toLocaleTimeString()}] ${msg}`];
     setDataLog([...logRef.current]);
   };
 
   const fetchCandles = async (interval, outputsize=100) => {
-    const r = await fetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`);
-    const d = await r.json();
+    const r=await fetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`);
+    const d=await r.json();
     if(d.status==="error") throw new Error(`Twelve Data: ${d.message}`);
-    const values=(d.values||[]).reverse();
+    const vals=(d.values||[]).reverse();
     return {
-      closes: values.map(v=>parseFloat(v.close)),
-      highs:  values.map(v=>parseFloat(v.high)),
-      lows:   values.map(v=>parseFloat(v.low)),
+      closes:  vals.map(v=>parseFloat(v.close)),
+      highs:   vals.map(v=>parseFloat(v.high)),
+      lows:    vals.map(v=>parseFloat(v.low)),
+      volumes: vals.map(v=>parseFloat(v.volume)||0),
     };
   };
 
   const fetchFRED = async series => {
-    const r = await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${series}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`);
-    const d = await r.json();
-    const obs=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value));
-    return obs[0]??null;
+    const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${series}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`);
+    const d=await r.json();
+    return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null;
   };
 
   const fetchSpot = async () => {
-    if(keys.td){
-      try{
-        const r=await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`);
-        const d=await r.json();
-        if(d.price&&parseFloat(d.price)>100) return { price:p2(d.price), src:"Twelve Data" };
-      }catch(_){}
-    }
+    if(keys.td) try{
+      const r=await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`);
+      const d=await r.json();
+      if(d.price&&parseFloat(d.price)>100) return {price:p2(d.price),src:"Twelve Data"};
+    }catch(_){}
     try{
-      // CoinGecko free tier returns price only — 24h high/low omitted (Pro feature)
       const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd");
-      if(r.ok){
-        const d=await r.json(), g=d?.["pax-gold"];
-        if(g?.usd>100) return { price:p2(g.usd), src:"CoinGecko PAXG" };
-      }
+      if(r.ok){const d=await r.json(),g=d?.["pax-gold"];if(g?.usd>100) return {price:p2(g.usd),src:"CoinGecko PAXG"};}
     }catch(_){}
     try{
       const r=await fetch("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD");
-      if(r.ok){
-        const d=await r.json();
-        const row=Array.isArray(d)?d[0]:null;
-        const sp=row?.spreadProfilePrices?.find(x=>x.spreadProfile==="prime");
-        if(sp?.bid>100) return { price:p2((sp.bid+sp.ask)/2), src:"Swissquote" };
-      }
+      if(r.ok){const d=await r.json(),q=d?.[0]?.spreadProfilePrices?.find(x=>x.spreadProfile==="prime");if(q?.ask&&q?.bid) return {price:p2((q.ask+q.bid)/2),src:"Swissquote"};}
     }catch(_){}
     return null;
   };
 
+  const fetchCOT = async () => {
+    try{
+      const r=await fetch("https://publicreporting.cftc.gov/resource/yw9f-hn96.json?$limit=2&$order=report_date_as_yyyy_mm_dd%20DESC&$where=commodity_name%20like%20'%25GOLD%25'");
+      if(!r.ok) return null;
+      const d=await r.json(); if(!d.length) return null;
+      const lat=d[0], prev=d[1];
+      const mmL=parseInt(lat.managed_money_positions_long_all||0);
+      const mmS=parseInt(lat.managed_money_positions_short_all||0);
+      const net=mmL-mmS;
+      const pNet=prev?parseInt(prev.managed_money_positions_long_all||0)-parseInt(prev.managed_money_positions_short_all||0):null;
+      return { mmLong:mmL, mmShort:mmS, netMM:net, weekChange:pNet!==null?net-pNet:null,
+               reportDate:lat.report_date_as_yyyy_mm_dd,
+               sentiment:net>200000?"CROWDED_LONG":net<50000?"CROWDED_SHORT":"NEUTRAL" };
+    }catch(_){ return null; }
+  };
+
   const fetchSignal = useCallback(async () => {
     setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
-    try {
-      addLog("Fetching XAU/USD spot price...");
-      const spot = await fetchSpot();
+    try{
+      addLog("Fetching spot price...");
+      const spot=await fetchSpot();
       if(!spot) throw new Error("Could not fetch gold spot price from any source.");
       addLog(`Spot: $${spot.price} (${spot.src})`);
 
-      let techData = null;
+      let td=null;
       if(keys.td){
         try{
-          addLog("Fetching 1h candles from Twelve Data...");
+          addLog("Fetching 1h candles...");
           const c1h=await fetchCandles("1h",100);
           const macd1h=calcMACD(c1h.closes);
-          const rsi1h=calcRSI(c1h.closes,14);
-          const atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes,14);
-          addLog(`1h MACD: ${macd1h.macd?.toFixed(2)}, ${macd1h.aboveSignal?"above":"below"} signal`);
-          addLog(`1h RSI: ${rsi1h.toFixed(1)}`);
+          const rsi1h=calcRSI(c1h.closes);
+          const atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
+          const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
+          const vol1h=calcVolRatio(c1h.volumes);
+          addLog(`1h → MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} VWAP:$${vwap?.toFixed(2)} Vol:${vol1h?.ratio?.toFixed(2)}x`);
 
           addLog("Fetching 4h candles...");
           const c4h=await fetchCandles("4h",100);
           const macd4h=calcMACD(c4h.closes);
-          const rsi4h=calcRSI(c4h.closes,14);
-          const atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes,14);
+          const rsi4h=calcRSI(c4h.closes);
+          const atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes);
+          const vol4h=calcVolRatio(c4h.volumes);
+          addLog(`4h → MACD:${macd4h.macd?.toFixed(2)} RSI:${rsi4h.toFixed(1)} ATR:$${atr4h.toFixed(2)}`);
 
-          addLog("Fetching daily candles for 200MA...");
+          addLog("Fetching daily candles (200MA + daily MACD/RSI)...");
           const c1d=await fetchCandles("1day",210);
           const ma200=calcSMA(c1d.closes,200);
+          const macdD=calcMACD(c1d.closes);
+          const rsiD=calcRSI(c1d.closes);
+          const volD=calcVolRatio(c1d.volumes);
           const h24=Math.max(...c1h.highs.slice(-24));
           const l24=Math.min(...c1h.lows.slice(-24));
+          addLog(`Daily → MACD:${macdD.macd?.toFixed(2)} RSI:${rsiD.toFixed(1)} 200MA:$${ma200?.toFixed(2)}`);
 
-          techData={ macd1h, rsi1h, atr1h, macd4h, rsi4h, atr4h, ma200, h24, l24, price:spot.price, src:spot.src };
-          addLog(`4h RSI: ${rsi4h.toFixed(1)}, ATR: $${atr4h.toFixed(2)}, 200MA: $${ma200?.toFixed(2)}`);
-        }catch(e){ addLog(`Twelve Data error: ${e.message} — falling back to AI inference`); }
+          const bullMacd=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
+          td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD,
+               ma200,h24,l24, bullMacd, bearMacd:3-bullMacd };
+        }catch(e){ addLog(`Twelve Data error: ${e.message}`); }
       }
 
-      let fredData={ nominal:null, tips:null, realYield:null, dxy:null };
+      let fred={nominal:null,tips:null,realYield:null,dxy:null};
       if(keys.fred){
         try{
-          addLog("Fetching FRED: 10Y nominal yield...");
-          fredData.nominal=await fetchFRED("DGS10");
-          addLog(`10Y nominal: ${fredData.nominal}%`);
-          addLog("Fetching FRED: TIPS breakeven...");
-          fredData.tips=await fetchFRED("T10YIE");
-          addLog(`TIPS breakeven: ${fredData.tips}%`);
-          if(fredData.nominal&&fredData.tips){ fredData.realYield=p2(fredData.nominal-fredData.tips); addLog(`Real yield: ${fredData.realYield}%`); }
-          addLog("Fetching FRED: DXY proxy...");
-          fredData.dxy=await fetchFRED("DTWEXBGS");
-          addLog(`DXY proxy: ${fredData.dxy}`);
+          addLog("Fetching FRED: yields + DXY...");
+          fred.nominal=await fetchFRED("DGS10");
+          fred.tips=await fetchFRED("T10YIE");
+          if(fred.nominal&&fred.tips) fred.realYield=p2(fred.nominal-fred.tips);
+          fred.dxy=await fetchFRED("DTWEXBGS");
+          addLog(`FRED → nominal:${fred.nominal}% real:${fred.realYield}% DXY:${fred.dxy}`);
         }catch(e){ addLog(`FRED error: ${e.message}`); }
       }
 
+      addLog("Fetching COT data (CFTC)...");
+      const cot=await fetchCOT();
+      cot ? addLog(`COT → net:${cot.netMM?.toLocaleString()} ${cot.sentiment} Δwk:${cot.weekChange?.toLocaleString()??"n/a"}`)
+          : addLog("COT unavailable");
+
       const session=getSession();
-      const atr=techData?.atr4h??techData?.atr1h??null;
+      const atr=td?.atr4h??td?.atr1h??null;
       const stopAmt=atr?p2(atr*1.5):null;
       const stopPct=stopAmt?p2((stopAmt/spot.price)*100):null;
 
-      const dataPackage=`
-=== PRE-COMPUTED MARKET DATA (verified from APIs — do not re-fetch) ===
+      const na = v => v??'unavailable';
+      const f3 = v => v?.toFixed(3)??'n/a';
+      const f2 = v => v?.toFixed(2)??'n/a';
+      const f1 = v => v?.toFixed(1)??'n/a';
+      const rsiLbl = v => !v?'':(v>70?' (OVERBOUGHT)':v<30?' (OVERSOLD)':' (neutral)');
+      const volLbl = r => !r?'':(r>1.5?' HIGH — confirms':r<0.8?' LOW — weak':' normal');
+
+      const pkg=`=== PRE-COMPUTED MARKET DATA — DO NOT RE-FETCH ===
 
 PRICE
-  XAU/USD Spot: $${spot.price} (source: ${spot.src})
-  24h High: $${techData?.h24??spot.h24??"unknown"}
-  24h Low:  $${techData?.l24??spot.l24??"unknown"}
-  Session:  ${session}
+  XAU/USD Spot:  $${spot.price} (${spot.src})
+  24h High: $${td?.h24??spot.h24??"unknown"} | 24h Low: $${td?.l24??spot.l24??"unknown"}
+  VWAP (23h):    $${f2(td?.vwap)} → price ${td?.vwap?(spot.price>td.vwap?"ABOVE — bullish intraday":"BELOW — bearish intraday"):"vs VWAP unknown"}
+  Session: ${session}
 
-MACD (calculated from real OHLCV candles)
-  1h MACD:  line=${techData?.macd1h?.macd?.toFixed(3)??"unavailable"}, signal=${techData?.macd1h?.signal?.toFixed(3)??"unavailable"}, hist=${techData?.macd1h?.histogram?.toFixed(3)??"unavailable"} (${techData?.macd1h?.aboveSignal?"ABOVE signal":"BELOW signal"}, hist ${techData?.macd1h?.expanding?"EXPANDING":"CONTRACTING"})
-  4h MACD:  line=${techData?.macd4h?.macd?.toFixed(3)??"unavailable"}, signal=${techData?.macd4h?.signal?.toFixed(3)??"unavailable"}, hist=${techData?.macd4h?.histogram?.toFixed(3)??"unavailable"} (${techData?.macd4h?.aboveSignal?"ABOVE signal":"BELOW signal"}, hist ${techData?.macd4h?.expanding?"EXPANDING":"CONTRACTING"})
+MACD — THREE TIMEFRAMES
+  1h:    line=${f3(td?.macd1h?.macd)} sig=${f3(td?.macd1h?.signal)} hist=${f3(td?.macd1h?.histogram)} | ${td?.macd1h?.aboveSignal?"ABOVE":"BELOW"} signal | hist ${td?.macd1h?.expanding?"EXPANDING":"CONTRACTING"}
+  4h:    line=${f3(td?.macd4h?.macd)} sig=${f3(td?.macd4h?.signal)} hist=${f3(td?.macd4h?.histogram)} | ${td?.macd4h?.aboveSignal?"ABOVE":"BELOW"} signal | hist ${td?.macd4h?.expanding?"EXPANDING":"CONTRACTING"}
+  Daily: line=${f3(td?.macdD?.macd)} sig=${f3(td?.macdD?.signal)} hist=${f3(td?.macdD?.histogram)} | ${td?.macdD?.aboveSignal?"ABOVE":"BELOW"} signal | hist ${td?.macdD?.expanding?"EXPANDING":"CONTRACTING"}
+  Alignment: ${td?`${td.bullMacd}/3 bullish, ${td.bearMacd}/3 bearish${td.bullMacd===3?" — ALL THREE BULLISH (strong)":td.bearMacd===3?" — ALL THREE BEARISH (strong)":""}` : "unavailable"}
 
-RSI (14-period, calculated from real candles)
-  1h RSI:  ${techData?.rsi1h?.toFixed(1)??"unavailable"} ${techData?.rsi1h>70?"(OVERBOUGHT)":techData?.rsi1h<30?"(OVERSOLD)":"(neutral)"}
-  4h RSI:  ${techData?.rsi4h?.toFixed(1)??"unavailable"} ${techData?.rsi4h>70?"(OVERBOUGHT)":techData?.rsi4h<30?"(OVERSOLD)":"(neutral)"}
+RSI (14-period)
+  1h: ${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h: ${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)} | Daily: ${f1(td?.rsiD)}${rsiLbl(td?.rsiD)}
+  200MA: $${f2(td?.ma200)} → price ${td?.ma200?(spot.price>td.ma200?"ABOVE (bull bias)":"BELOW (bear bias)"):"unknown"}
 
-ATR & STOP SIZING (14-period ATR from real candles)
-  1h ATR:  $${techData?.atr1h?.toFixed(2)??"unavailable"}
-  4h ATR:  $${techData?.atr4h?.toFixed(2)??"unavailable"}
-  Recommended stop: $${stopAmt??"use ~0.7% as fallback"} (${stopPct??"~0.7"}% from entry)
+VOLUME (vs 20-period average)
+  1h ratio:    ${td?.vol1h?`${td.vol1h.ratio.toFixed(2)}x${volLbl(td.vol1h.ratio)}`:"unavailable"}
+  4h ratio:    ${td?.vol4h?`${td.vol4h.ratio.toFixed(2)}x${volLbl(td.vol4h.ratio)}`:"unavailable"}
+  Daily ratio: ${td?.volD?`${td.volD.ratio.toFixed(2)}x${volLbl(td.volD.ratio)}`:"unavailable"}
 
-200-DAY MA
-  200MA: $${techData?.ma200?.toFixed(2)??"unavailable"} → price is ${techData?.ma200?(spot.price>techData.ma200?"ABOVE (bullish bias)":"BELOW (bearish bias)"):"unknown vs MA"}
+ATR & STOP
+  1h ATR: $${f2(td?.atr1h)} | 4h ATR: $${f2(td?.atr4h)}
+  Recommended stop: $${na(stopAmt)} (${na(stopPct)}% from entry)
 
-MACRO (from FRED API)
-  10Y Nominal Yield:  ${fredData.nominal??"unavailable"}%
-  TIPS Breakeven:     ${fredData.tips??"unavailable"}%
-  10Y Real Yield:     ${fredData.realYield??"unavailable"}% ${fredData.realYield!==null?(fredData.realYield>1.5?"(HIGH — bearish gold)":fredData.realYield<0.5?"(LOW — bullish gold)":"(moderate)"):""}
-  DXY (Fed TWI):      ${fredData.dxy??"unavailable"}
+MACRO — FRED
+  10Y Nominal: ${na(fred.nominal)}% | TIPS Breakeven: ${na(fred.tips)}%
+  Real Yield:  ${na(fred.realYield)}%${fred.realYield!==null?(fred.realYield>1.5?" (HIGH — bearish)":fred.realYield<0.5?" (LOW — bullish)":" (moderate)"):""}
+  DXY (Fed TWI): ${na(fred.dxy)}
 
-=== NOW DO YOUR JOB ===
-Search for: (1) top gold news last 24h, (2) key institutional S/R levels, (3) binary events within 48h, (4) Fed speakers today.
-Then output the JSON signal using ALL of the above data.`.trim();
+COT — CFTC Managed Money (hedge funds, published weekly)
+  Report date: ${na(cot?.reportDate)}
+  MM Long: ${cot?.mmLong?.toLocaleString()??"n/a"} | MM Short: ${cot?.mmShort?.toLocaleString()??"n/a"}
+  Net MM:  ${cot?.netMM?.toLocaleString()??"n/a"} | Week Δ: ${cot?.weekChange!==null?(cot.weekChange>0?"+":"")+cot.weekChange?.toLocaleString():"n/a"}
+  Sentiment: ${na(cot?.sentiment)} (>200k=CROWDED LONG=bearish signal, <50k=CROWDED SHORT=bullish signal)
 
-      addLog("Sending to AI for news + signal synthesis...");
-      const tools=[{ type:"web_search_20250305", name:"web_search" }];
-      let history=[{ role:"user", content:dataPackage }];
+=== YOUR JOB: search news, key S/R levels, binary events, Fed speakers → output JSON ===`.trim();
+
+      addLog("Sending to AI for news + synthesis...");
+      const tools=[{type:"web_search_20250305",name:"web_search"}];
+      let history=[{role:"user",content:pkg}];
       let finalText="";
 
       for(let i=0;i<10;i++){
         const res=await fetch("https://api.anthropic.com/v1/messages",{
           method:"POST",
           headers:{"Content-Type":"application/json","x-api-key":keys.anthropic,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-          body:JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:2000, system:SYSTEM, tools, messages:history })
+          body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:2000,system:SYSTEM,tools,messages:history})
         });
-        if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e?.error?.message||`API error ${res.status}`); }
+        if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e?.error?.message||`API error ${res.status}`);}
         const data=await res.json();
         const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
         if(texts) finalText=texts;
         if(data.stop_reason==="end_turn") break;
-        history.push({ role:"assistant", content:data.content });
+        history.push({role:"assistant",content:data.content});
         if(data.stop_reason==="tool_use"){
-          addLog("AI running web search...");
-          const results=(data.content||[]).filter(b=>b.type==="tool_use").map(b=>({ type:"tool_result", tool_use_id:b.id, content:"Search executed." }));
-          if(results.length) history.push({ role:"user", content:results });
-          else break;
+          addLog("AI searching web...");
+          const results=(data.content||[]).filter(b=>b.type==="tool_use").map(b=>({type:"tool_result",tool_use_id:b.id,content:"Search executed."}));
+          if(results.length) history.push({role:"user",content:results}); else break;
         } else break;
       }
 
       const parsed=parseJSON(finalText);
       if(!parsed) throw new Error("Could not parse signal JSON. Please retry.");
       parsed.session=session;
-      if(techData?.h24&&!parsed.high_24h) parsed.high_24h=String(techData.h24);
-      if(techData?.l24&&!parsed.low_24h)  parsed.low_24h=String(techData.l24);
-      if(techData?.ma200) parsed.ma200=techData.ma200.toFixed(2);
-      if(fredData.realYield!==null) parsed.real_yield=`${fredData.realYield}%`;
-      if(fredData.dxy!==null)       parsed.dxy=String(fredData.dxy);
+      if(td?.h24&&!parsed.high_24h)   parsed.high_24h=String(td.h24);
+      if(td?.l24&&!parsed.low_24h)    parsed.low_24h=String(td.l24);
+      if(td?.ma200)                    parsed.ma200=td.ma200.toFixed(2);
+      if(td?.vwap&&!parsed.vwap)      parsed.vwap=td.vwap.toFixed(2);
+      if(fred.realYield!==null)        parsed.real_yield=`${fred.realYield}%`;
+      if(fred.dxy!==null)              parsed.dxy=String(fred.dxy);
+      if(cot&&!parsed.cot_net)         parsed.cot_net=cot.netMM?.toLocaleString();
+      if(cot&&!parsed.cot_sentiment)   parsed.cot_sentiment=cot.sentiment;
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
 
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally  { setLoading(false); }
-  }, [keys]);
+  },[keys]);
 
   const as=sig?aStyl(sig.action):{};
   const sc=sig?.scorecard||{};
@@ -415,7 +462,7 @@ Then output the JSON signal using ALL of the above data.`.trim();
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.9rem",paddingBottom:"0.75rem",borderBottom:"1px solid #1e293b"}}>
         <div>
           <span style={{fontWeight:700,fontSize:14,letterSpacing:"0.06em",color:"#fbbf24"}}>✦ SIGNAL DECK GOLD</span>
-          <span style={{...mono,fontSize:11,color:"#475569",marginLeft:8}}>XAU/USD · Real APIs · Paper Trading</span>
+          <span style={{...mono,fontSize:11,color:"#475569",marginLeft:8}}>XAU/USD · 8-Step · Real APIs</span>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {ts&&<span style={{...mono,fontSize:11,color:"#475569"}}>{ts.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>}
@@ -424,42 +471,48 @@ Then output the JSON signal using ALL of the above data.`.trim();
         </div>
       </div>
 
-      {/* API Key Setup */}
+      {/* Key Setup */}
       {!keysSet&&(
         <div style={{...card,marginBottom:12}}>
           <p style={{...lbl,color:"#fbbf24",marginBottom:12}}>🔑 API Key Setup</p>
           <p style={{fontSize:12,color:"#64748b",margin:"0 0 16px",lineHeight:1.6}}>
-            Keys stay in memory only — never stored, never sent to chat.<br/>
-            <span style={{color:"#475569"}}>Twelve Data: </span>
-            <a href="https://twelvedata.com" target="_blank" rel="noopener noreferrer" style={{color:"#3b82f6"}}>twelvedata.com</a>
-            <span style={{color:"#475569"}}> · FRED: </span>
-            <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" rel="noopener noreferrer" style={{color:"#3b82f6"}}>fred.stlouisfed.org</a>
+            Keys stay in browser memory only — never stored or sent anywhere except the API they belong to.<br/>
+            <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" style={{color:"#3b82f6"}}>Anthropic</a>
+            {" · "}
+            <a href="https://twelvedata.com" target="_blank" rel="noopener noreferrer" style={{color:"#3b82f6"}}>Twelve Data</a>
+            {" · "}
+            <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" rel="noopener noreferrer" style={{color:"#3b82f6"}}>FRED</a>
           </p>
-          <div style={{marginBottom:12}}>
-            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:5}}>Anthropic API Key <span style={{color:"#f87171"}}>(required — get free at console.anthropic.com)</span></label>
-            <input type="password" placeholder="sk-ant-..." value={tmpKeys.anthropic} onChange={e=>setTmpKeys(k=>({...k,anthropic:e.target.value}))} style={inputStyle}/>
+          {[
+            {field:"anthropic", label:"Anthropic API Key", hint:"required — powers the AI signal", ph:"sk-ant-..."},
+            {field:"td",        label:"Twelve Data Key",   hint:"MACD, RSI, ATR, VWAP, Volume, 200MA", ph:"a1b2c3d4..."},
+            {field:"fred",      label:"FRED API Key",      hint:"real yield + DXY (free, instant)", ph:"abcdef123456..."},
+          ].map(({field,label,hint,ph})=>(
+            <div key={field} style={{marginBottom:12}}>
+              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:5}}>
+                {label} <span style={{color:field==="anthropic"?"#f87171":"#4ade80"}}>({hint})</span>
+              </label>
+              <input type="password" placeholder={ph} value={tmpKeys[field]}
+                onChange={e=>setTmpKeys(k=>({...k,[field]:e.target.value}))} style={inputStyle}/>
+            </div>
+          ))}
+          <div style={{display:"flex",gap:10,marginTop:4}}>
+            <button onClick={()=>{setKeys(tmpKeys);setKeysSet(true);}} style={{...btn(),flex:1,textAlign:"center"}}>Save Keys & Run Analysis ↗</button>
+            <button onClick={()=>{setKeys({...tmpKeys,td:"",fred:""});setKeysSet(true);}} style={{...btn("gold"),fontSize:11}}>Anthropic only</button>
           </div>
-          <div style={{marginBottom:12}}>
-            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:5}}>Twelve Data API Key <span style={{color:"#4ade80"}}>(unlocks real MACD/RSI/ATR)</span></label>
-            <input type="password" placeholder="e.g. a1b2c3d4e5f6..." value={tmpKeys.td} onChange={e=>setTmpKeys(k=>({...k,td:e.target.value}))} style={inputStyle}/>
-          </div>
-          <div style={{marginBottom:16}}>
-            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:5}}>FRED API Key <span style={{color:"#4ade80"}}>(unlocks real yield + DXY)</span></label>
-            <input type="password" placeholder="e.g. abcdef1234567890..." value={tmpKeys.fred} onChange={e=>setTmpKeys(k=>({...k,fred:e.target.value}))} style={inputStyle}/>
-          </div>
-          <button onClick={()=>{ setKeys({...tmpKeys}); setKeysSet(true); setSig(null); setError(null); }} disabled={!tmpKeys.anthropic} style={{...btn(),opacity:tmpKeys.anthropic?1:0.5}}>
-            Save & Continue →
-          </button>
-          <p style={{fontSize:10,color:"#334155",margin:"10px 0 0"}}>Without keys: MACD/RSI/ATR will be AI-inferred (less accurate). With keys: all technicals are mathematically computed from real candle data.</p>
+          <p style={{fontSize:10,color:"#334155",margin:"10px 0 0"}}>Without Twelve Data: MACD/RSI/ATR/VWAP inferred by AI. Without FRED: yields/DXY from web search. Both reduce accuracy.</p>
         </div>
       )}
 
       {/* Ready */}
       {keysSet&&!sig&&!loading&&!error&&(
         <div style={{...card,textAlign:"center",padding:"2.5rem 1.5rem"}}>
-          <p style={{...mono,fontSize:13,color:"#64748b",margin:"0 0 5px"}}>SIGNAL DECK GOLD ready</p>
-          <p style={{fontSize:11,color:"#475569",margin:"0 0 14px"}}>
-            {keys.td?"✓ Twelve Data":"⚠ No Twelve Data key"} · {keys.fred?"✓ FRED":"⚠ No FRED key"} · Web search active
+          <p style={{...mono,fontSize:13,color:"#64748b",margin:"0 0 6px"}}>SIGNAL DECK GOLD ready</p>
+          <p style={{fontSize:11,color:"#475569",margin:"0 0 4px"}}>
+            {keys.td?"✓ Twelve Data (MACD/RSI/ATR/VWAP/Volume/200MA)":"⚠ No Twelve Data — AI inference only"}
+          </p>
+          <p style={{fontSize:11,color:"#475569",margin:"0 0 16px"}}>
+            {keys.fred?"✓ FRED (real yield + DXY)":"⚠ No FRED — web search fallback"} · COT (CFTC, public) · Web search (news + levels)
           </p>
           <button onClick={fetchSignal} style={btn()}>Run Analysis ↗</button>
         </div>
@@ -468,13 +521,13 @@ Then output the JSON signal using ALL of the above data.`.trim();
       {/* Loading */}
       {loading&&(
         <div style={{...card,marginBottom:10}}>
-          <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:16,paddingTop:8}}>
+          <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:14,paddingTop:8}}>
             {[0,1,2,3].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#ca8a04",animation:`bounce 1.4s ease-in-out ${i*0.22}s infinite`}}/>)}
           </div>
-          <p style={{...mono,fontSize:12,color:"#64748b",textAlign:"center",margin:"0 0 12px"}}>
+          <p style={{...mono,fontSize:12,color:"#64748b",textAlign:"center",margin:"0 0 10px"}}>
             {dataLog.slice(-1)[0]?.replace(/^\[.*?\] /,"")||"Initializing..."}
           </p>
-          <div style={{background:"#020617",borderRadius:8,padding:"8px 10px",maxHeight:120,overflowY:"auto"}}>
+          <div style={{background:"#020617",borderRadius:8,padding:"8px 10px",maxHeight:110,overflowY:"auto"}}>
             {dataLog.map((l,i)=><div key={i} style={{...mono,fontSize:10,color:"#334155",lineHeight:1.6}}>{l}</div>)}
           </div>
         </div>
@@ -505,9 +558,9 @@ Then output the JSON signal using ALL of the above data.`.trim();
               </div>
               <div style={{display:"flex",gap:8,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{...mono,fontSize:11,color:"#64748b",padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>{sig.session}</span>
-                {sig.passes!==undefined&&<span style={{...mono,fontSize:11,color:sig.passes>=4?"#4ade80":sig.passes===3?"#fbbf24":"#f87171"}}>{sig.passes}/6 confirmed</span>}
+                {sig.passes!==undefined&&<span style={{...mono,fontSize:11,color:sig.passes>=5?"#4ade80":sig.passes>=4?"#fbbf24":"#f87171"}}>{sig.passes}/8 confirmed</span>}
                 {keys.td&&<span style={{fontSize:10,color:"#4ade80",...mono}}>✓ Real OHLCV</span>}
-                {keys.fred&&<span style={{fontSize:10,color:"#4ade80",...mono}}>✓ FRED macro</span>}
+                {keys.fred&&<span style={{fontSize:10,color:"#4ade80",...mono}}>✓ FRED</span>}
               </div>
             </div>
             <div style={{textAlign:"right"}}>
@@ -529,8 +582,8 @@ Then output the JSON signal using ALL of the above data.`.trim();
             {[
               {name:"Entry",    val:`$${fmt(sig.entry)}`,  sub:sig.entry_note},
               {name:"Stop",     val:`$${fmt(sig.stop)}`,   sub:[sig.stop_pct?`${sig.stop_pct}% · ATR-based`:null,sig.stop_note].filter(Boolean).join(" · ")},
-              {name:"Target 1", val:`$${fmt(sig.t1)}`,     sub:null},
-              {name:"Target 2", val:`$${fmt(sig.t2)}`,     sub:null},
+              {name:"Target 1", val:`$${fmt(sig.t1)}`},
+              {name:"Target 2", val:`$${fmt(sig.t2)}`},
             ].map(r=>(
               <div key={r.name} style={{padding:"5px 0",borderBottom:"1px solid #1e293b"}}>
                 <div style={{display:"flex",justifyContent:"space-between"}}>
@@ -550,6 +603,7 @@ Then output the JSON signal using ALL of the above data.`.trim();
             {[
               {name:"24h High",   val:`$${fmt(sig.high_24h)}`},
               {name:"24h Low",    val:`$${fmt(sig.low_24h)}`},
+              {name:"VWAP",       val:`$${fmt(sig.vwap)}`},
               {name:"Support",    val:`$${fmt(sig.support)}`},
               {name:"Resistance", val:`$${fmt(sig.resistance)}`},
               {name:"200-Day MA", val:`$${fmt(sig.ma200)}`},
@@ -562,29 +616,42 @@ Then output the JSON signal using ALL of the above data.`.trim();
           </div>
         </div>
 
-        {/* Macro */}
-        <div style={{...card,marginBottom:10}}>
-          <p style={lbl}>Primary Macro Drivers {keys.fred&&<span style={{color:"#4ade80",fontSize:9}}>· FRED API</span>}</p>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            <div>
-              <p style={{fontSize:10,color:"#475569",margin:"0 0 3px"}}>DXY (Fed TWI) — rising = bearish gold</p>
+        {/* Macro + COT */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+          <div style={card}>
+            <p style={lbl}>Macro Drivers {keys.fred&&<span style={{color:"#4ade80",fontSize:9}}>· FRED</span>}</p>
+            <div style={{marginBottom:8,paddingBottom:8,borderBottom:"1px solid #1e293b"}}>
+              <p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>DXY (Fed TWI) — rising = bearish gold</p>
               <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(sig.dxy)}</p>
             </div>
             <div>
-              <p style={{fontSize:10,color:"#475569",margin:"0 0 3px"}}>10Y Real Yield — rising = bearish</p>
+              <p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>10Y Real Yield — rising = bearish gold</p>
               <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(sig.real_yield)}</p>
+            </div>
+          </div>
+          <div style={card}>
+            <p style={lbl}>COT Positioning <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· CFTC weekly</span></p>
+            <div style={{marginBottom:6,paddingBottom:6,borderBottom:"1px solid #1e293b"}}>
+              <p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Managed Money Net (hedge funds)</p>
+              <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(sig.cot_net)} contracts</p>
+            </div>
+            <div>
+              <p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Sentiment</p>
+              <p style={{...mono,fontSize:12,margin:0,color:sig.cot_sentiment==="CROWDED_LONG"?"#f87171":sig.cot_sentiment==="CROWDED_SHORT"?"#4ade80":"#94a3b8"}}>
+                {fmt(sig.cot_sentiment)}
+              </p>
             </div>
           </div>
         </div>
 
         {/* Scorecard */}
         <div style={{...card,marginBottom:10}}>
-          <p style={lbl}>6-Step Scorecard</p>
+          <p style={lbl}>8-Step Scorecard</p>
           {SC_ROWS.map(({key,label})=>{
             const item=sc[key]; if(!item) return null;
             const st=rStyl(item.r);
             return (
-              <div key={key} style={{display:"grid",gridTemplateColumns:"150px 76px 1fr",gap:10,alignItems:"center",padding:"5px 0",borderBottom:"1px solid #1e293b"}}>
+              <div key={key} style={{display:"grid",gridTemplateColumns:"160px 76px 1fr",gap:10,alignItems:"center",padding:"5px 0",borderBottom:"1px solid #1e293b"}}>
                 <span style={{fontSize:11,color:"#64748b"}}>{label}</span>
                 <span style={{...mono,fontSize:10,fontWeight:600,background:st.bg,color:st.fg,padding:"2px 6px",borderRadius:6,textAlign:"center"}}>{item.r}</span>
                 <span style={{fontSize:11,color:"#475569",lineHeight:1.4}}>{item.note}</span>
@@ -627,7 +694,7 @@ Then output the JSON signal using ALL of the above data.`.trim();
           )}
         </div>
 
-        {/* Data log */}
+        {/* Log */}
         <div style={{marginBottom:10}}>
           <button onClick={()=>setShowLog(v=>!v)} style={{fontSize:11,color:"#475569",background:"transparent",border:"none",cursor:"pointer",...mono,padding:0}}>
             {showLog?"▲ Hide":"▼ Show"} data pipeline log ({dataLog.length} steps)
@@ -642,7 +709,7 @@ Then output the JSON signal using ALL of the above data.`.trim();
         {/* Risk rules */}
         <div style={{...card,background:"#1c1408",border:"1px solid #78350f",marginBottom:"0.9rem"}}>
           <p style={{fontSize:11,fontWeight:700,color:"#fbbf24",margin:"0 0 5px"}}>Risk rules — always active</p>
-          {["Max 1-2% of account at risk per trade","ATR-based stop is pre-calculated — do not widen it","Price already 25%+ toward T1 → skip, wait for pullback","T1 hit → close 50%, move stop to entry immediately","Exit 100% before any FOMC / CPI / NFP / PCE release"].map((r,i)=>(
+          {["Max 1-2% of account at risk per trade","ATR-based stop is pre-calculated — do not widen it","Price already 25%+ toward T1 → skip, wait for pullback","T1 hit → close 50%, move stop to entry immediately","Exit 100% before any FOMC / CPI / NFP / PCE release","COT net >200k + resistance = high SHORT probability — respect it"].map((r,i)=>(
             <span key={i} style={{fontSize:11,color:"#d97706",...mono,display:"block"}}>· {r}</span>
           ))}
         </div>
