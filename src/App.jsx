@@ -250,12 +250,21 @@ function SignalDeckGold() {
       }catch(_){}
     }
     try{
-      const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd&include_24hr_high=true&include_24hr_low=true");
-      if(r.ok){ const d=await r.json(), g=d?.["pax-gold"]; if(g?.usd>100) return { price:p2(g.usd), h24:p2(g.usd_24h_high), l24:p2(g.usd_24h_low), src:"CoinGecko PAXG" }; }
+      // CoinGecko free tier returns price only — 24h high/low omitted (Pro feature)
+      const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd");
+      if(r.ok){
+        const d=await r.json(), g=d?.["pax-gold"];
+        if(g?.usd>100) return { price:p2(g.usd), src:"CoinGecko PAXG" };
+      }
     }catch(_){}
     try{
-      const r=await fetch("https://api.metals.live/v1/spot");
-      if(r.ok){ const d=await r.json(), g=Array.isArray(d)?d.find(x=>x.gold!==undefined):null; if(g?.gold) return { price:p2(g.gold), src:"metals.live" }; }
+      const r=await fetch("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD");
+      if(r.ok){
+        const d=await r.json();
+        const row=Array.isArray(d)?d[0]:null;
+        const sp=row?.spreadProfilePrices?.find(x=>x.spreadProfile==="prime");
+        if(sp?.bid>100) return { price:p2((sp.bid+sp.ask)/2), src:"Swissquote" };
+      }
     }catch(_){}
     return null;
   };
