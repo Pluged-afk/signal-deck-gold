@@ -419,26 +419,35 @@ COT — CFTC Managed Money (hedge funds, published weekly)
         });
         if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e?.error?.message||`API error ${res.status}`);}
         const data=await res.json();
-        if(data.stop_reason==="end_turn"){
-          const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
-          if(texts) finalText=texts;
-          break;
+        // Always keep the most recent text block; the final answer overwrites any preamble.
+        const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+        if(texts) finalText=texts;
+
+        if(data.stop_reason==="end_turn") break;
+
+        // web_search is a server-side tool: it runs server-side and returns "pause_turn"
+        // for long turns. Resume by echoing the assistant content back and continuing.
+        if(data.stop_reason==="pause_turn"){
+          addLog("AI searching web (resuming)...");
+          history.push({role:"assistant",content:data.content});
+          continue;
         }
+
         history.push({role:"assistant",content:data.content});
+
+        // Client-side tool path (kept for safety — server tools won't trigger this).
         if(data.stop_reason==="tool_use"){
           addLog("AI searching web...");
           const results=(data.content||[]).filter(b=>b.type==="tool_use").map(b=>({type:"tool_result",tool_use_id:b.id,content:"Search executed."}));
           if(results.length) history.push({role:"user",content:results}); else break;
-        } else {
-          // unexpected stop — grab any text and bail
-          const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
-          if(texts) finalText=texts;
-          break;
-        }
+        } else break; // max_tokens or other — use whatever text we captured
       }
 
-      const parsed=parseJSON(finalText);
-      if(!parsed) throw new Error("Could not parse signal JSON. Please retry.");
+      let parsed=parseJSON(finalText);
+      if(!parsed){
+        addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`);
+        throw new Error("Could not parse signal JSON. Please retry.");
+      }
       parsed.session=session;
       if(td?.h24&&!parsed.high_24h)   parsed.high_24h=String(td.h24);
       if(td?.l24&&!parsed.low_24h)    parsed.low_24h=String(td.l24);
