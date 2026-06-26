@@ -225,9 +225,10 @@ const calcVolRatio = (volumes, period=20) => {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 function SignalDeckGold() {
-  const [keys,    setKeys]    = useState({ anthropic:"", td:"", fred:"" });
-  const [tmpKeys, setTmpKeys] = useState({ anthropic:"", td:"", fred:"" });
-  const [keysSet, setKeysSet] = useState(false);
+  const savedKeys = () => { try { return JSON.parse(localStorage.getItem("sdg_keys")||"{}"); } catch(_){ return {}; } };
+  const [keys,    setKeys]    = useState({ anthropic:"", td:"", fred:"", ...savedKeys() });
+  const [tmpKeys, setTmpKeys] = useState({ anthropic:"", td:"", fred:"", ...savedKeys() });
+  const [keysSet, setKeysSet] = useState(() => !!savedKeys().anthropic);
   const [sig,     setSig]     = useState(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -497,8 +498,8 @@ COT — CFTC Managed Money (hedge funds, published weekly)
             </div>
           ))}
           <div style={{display:"flex",gap:10,marginTop:4}}>
-            <button onClick={()=>{setKeys(tmpKeys);setKeysSet(true);}} style={{...btn(),flex:1,textAlign:"center"}}>Save Keys & Run Analysis ↗</button>
-            <button onClick={()=>{setKeys({...tmpKeys,td:"",fred:""});setKeysSet(true);}} style={{...btn("gold"),fontSize:11}}>Anthropic only</button>
+            <button onClick={()=>{localStorage.setItem("sdg_keys",JSON.stringify(tmpKeys));setKeys(tmpKeys);setKeysSet(true);}} style={{...btn(),flex:1,textAlign:"center"}}>Save Keys & Run Analysis ↗</button>
+            <button onClick={()=>{const k={...tmpKeys,td:"",fred:""};localStorage.setItem("sdg_keys",JSON.stringify(k));setKeys(k);setKeysSet(true);}} style={{...btn("gold"),fontSize:11}}>Anthropic only</button>
           </div>
           <p style={{fontSize:10,color:"#334155",margin:"10px 0 0"}}>Without Twelve Data: MACD/RSI/ATR/VWAP inferred by AI. Without FRED: yields/DXY from web search. Both reduce accuracy.</p>
         </div>
