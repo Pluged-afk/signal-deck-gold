@@ -11,7 +11,6 @@ function AccessGate({ onUnlock }) {
 
   const attempt = () => {
     if (input.trim() === ACCESS_CODE) {
-      sessionStorage.setItem(SESSION_KEY, "1");
       onUnlock();
     } else {
       setShake(true);
@@ -77,7 +76,7 @@ function AccessGate({ onUnlock }) {
 
 // ─── ROOT EXPORT ─────────────────────────────────────────────────────────────
 export default function App() {
-  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
+  const [unlocked, setUnlocked] = useState(false);
   if (!unlocked) return <AccessGate onUnlock={() => setUnlocked(true)} />;
   return <SignalDeckGold />;
 }
