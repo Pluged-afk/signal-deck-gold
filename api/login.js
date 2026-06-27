@@ -43,7 +43,7 @@ export default async function handler(req, res) {
     if (redis) {
       const n = await redis.incr(`sdg_fail:${ip}`);
       await redis.expire(`sdg_fail:${ip}`, 86400);
-      if (n >= MAX_FAILS) { await redis.sAdd("sdg_blocked", ip); return "blocked"; }
+      if (n >= MAX_FAILS) { await redis.sAdd("sdg_blocked", ip); await redis.del(`sdg_fail:${ip}`); return "blocked"; }
     }
     return "wrong";
   });
