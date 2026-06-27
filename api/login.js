@@ -1,22 +1,12 @@
 import crypto from "node:crypto";
+import { withRedis } from "./_redis.js";
 
 // Login handler + IP-based lockout. Edge middleware can't read POST bodies, so
 // the passcode check lives here. After MAX_FAILS wrong attempts an IP is added
-// to a durable block set (Vercel KV / Upstash) and every further attempt —
-// right or wrong — is refused until an admin clears it via /api/reset.
+// to a durable Redis block set; every further attempt — right or wrong — is
+// refused until an admin clears it via /api/reset. Fails OPEN if Redis is down.
 const COOKIE = "sdg_auth";
 const MAX_FAILS = 2;
-
-async function kv(...cmd) {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const tok = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !tok) return null; // store not linked → fail open (no limiting)
-  try {
-    const r = await fetch(`${url}/${cmd.map(encodeURIComponent).join("/")}`, { headers: { Authorization: `Bearer ${tok}` } });
-    if (!r.ok) return null;
-    return (await r.json()).result;
-  } catch (_) { return null; }
-}
 
 const ipOf = req =>
   (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
@@ -30,11 +20,6 @@ export default async function handler(req, res) {
 
   const ip = ipOf(req);
 
-  // Already blocked → refuse outright (even a correct passcode won't pass).
-  if ((await kv("sismember", "sdg_blocked", ip)) === 1) {
-    res.statusCode = 303; res.setHeader("Location", "/?b=1"); res.end(); return;
-  }
-
   let pass = "";
   try {
     if (req.body && typeof req.body === "object") pass = req.body.pass || "";
@@ -45,8 +30,25 @@ export default async function handler(req, res) {
     }
   } catch (_) {}
 
-  if (PASS && pass === PASS) {
-    await kv("del", `sdg_fail:${ip}`); // reset the counter on success
+  const outcome = await withRedis(async (redis) => {
+    // Blocked already? Refuse outright (even a correct passcode won't pass).
+    if (redis && (await redis.sIsMember("sdg_blocked", ip))) return "blocked";
+
+    if (PASS && pass === PASS) {
+      if (redis) await redis.del(`sdg_fail:${ip}`); // reset counter on success
+      return "ok";
+    }
+
+    // Wrong passcode → count the failure; block once it reaches MAX_FAILS.
+    if (redis) {
+      const n = await redis.incr(`sdg_fail:${ip}`);
+      await redis.expire(`sdg_fail:${ip}`, 86400);
+      if (n >= MAX_FAILS) { await redis.sAdd("sdg_blocked", ip); return "blocked"; }
+    }
+    return "wrong";
+  });
+
+  if (outcome === "ok") {
     const token = crypto.createHash("sha256").update(`${USER}:${PASS}`).digest("hex");
     res.statusCode = 303;
     res.setHeader("Set-Cookie", `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax`);
@@ -55,14 +57,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Wrong passcode → count the failure; block this IP once it reaches MAX_FAILS.
-  let blockedNow = false;
-  const n = await kv("incr", `sdg_fail:${ip}`);
-  if (n !== null) {
-    await kv("expire", `sdg_fail:${ip}`, 86400);
-    if (n >= MAX_FAILS) { await kv("sadd", "sdg_blocked", ip); blockedNow = true; }
-  }
   res.statusCode = 303;
-  res.setHeader("Location", blockedNow ? "/?b=1" : "/?e=1");
+  res.setHeader("Location", outcome === "blocked" ? "/?b=1" : "/?e=1");
   res.end();
 }

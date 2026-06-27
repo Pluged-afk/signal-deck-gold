@@ -9,21 +9,6 @@ export const config = { matcher: "/:path*" };
 
 const COOKIE = "sdg_auth";
 
-async function kv(...cmd) {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const tok = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !tok) return null; // store not linked → fail open
-  try {
-    const r = await fetch(`${url}/${cmd.map(encodeURIComponent).join("/")}`, { headers: { Authorization: `Bearer ${tok}` } });
-    if (!r.ok) return null;
-    return (await r.json()).result;
-  } catch (_) { return null; }
-}
-
-const ipOf = req =>
-  (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
-  req.headers.get("x-real-ip") || "unknown";
-
 async function sha256(s) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
@@ -74,6 +59,16 @@ function lockedPage() {
 }
 
 export default async function middleware(request) {
+  const url = new URL(request.url);
+
+  // Explicitly ban all crawlers (belt-and-suspenders with the noindex header).
+  // Served without auth — it contains nothing sensitive.
+  if (url.pathname === "/robots.txt") {
+    return new Response("User-agent: *\nDisallow: /\n", {
+      status: 200, headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" },
+    });
+  }
+
   const USER = process.env.SITE_USER || "signal";
   const PASS = process.env.SITE_PASS;
 
@@ -86,7 +81,6 @@ export default async function middleware(request) {
 
   // Login + reset functions read the request body / their own token, so let
   // them through untouched (they enforce their own checks).
-  const url = new URL(request.url);
   if (url.pathname === "/api/login" || url.pathname === "/api/reset") return next();
 
   const token = await sha256(`${USER}:${PASS}`);
@@ -96,11 +90,10 @@ export default async function middleware(request) {
     return next();
   }
 
-  // For top-level page loads, check the block list (one KV call per visit) and
-  // render the right screen. Asset requests without a cookie just get the form.
+  // For top-level page loads, render login or the locked screen. The lockout
+  // itself is enforced in /api/login (which redirects blocked IPs to ?b=1).
   const wantsHtml = (request.headers.get("accept") || "").includes("text/html");
   if (wantsHtml) {
-    if ((await kv("sismember", "sdg_blocked", ipOf(request))) === 1) return lockedPage();
     if (url.searchParams.get("b") === "1") return lockedPage();
     return loginPage(url.searchParams.get("e") === "1");
   }
