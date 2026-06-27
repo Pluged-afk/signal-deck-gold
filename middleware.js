@@ -63,7 +63,10 @@ export default async function middleware(request) {
   // Login form submission.
   if (request.method === "POST") {
     let pass = "";
-    try { pass = (await request.formData()).get("pass") || ""; } catch (_) {}
+    try {
+      const body = await request.text();
+      pass = new URLSearchParams(body).get("pass") || "";
+    } catch (_) {}
     if (pass === PASS) {
       return new Response(null, {
         status: 303,
