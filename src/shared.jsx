@@ -9,10 +9,6 @@ export const card = { background:"#0f172a", borderRadius:12, border:"1px solid #
 export const lbl  = { fontSize:10, color:"#475569", letterSpacing:"0.08em", margin:"0 0 8px", textTransform:"uppercase", fontWeight:600 };
 export const inputStyle = { width:"100%", padding:"8px 10px", background:"#0f172a", border:"1px solid #334155", borderRadius:8, color:"#e2e8f0", fontSize:12, ...mono, boxSizing:"border-box" };
 
-// Themed action button: pass a theme color for accent buttons.
-export const btn = (accent="#2563eb", textCol="#60a5fa", bg="#1e3a5f") =>
-  ({ padding:"8px 18px", background:bg, border:`1px solid ${accent}`, borderRadius:8, color:textCol, fontSize:12, cursor:"pointer", ...mono });
-
 // ─── Formatters ─────────────────────────────────────────────────────────────
 export const fmt = v => (v!==undefined&&v!==null&&v!==""&&v!=="null") ? v : "—";
 export const p2  = n => parseFloat(parseFloat(n).toFixed(2));
