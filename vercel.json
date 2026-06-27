@@ -11,7 +11,7 @@
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; connect-src 'self' https://api.anthropic.com https://api.twelvedata.com https://api.stlouisfed.org https://api.binance.com https://fapi.binance.com https://api.coingecko.com https://api.alternative.me https://forex-data-feed.swissquote.com https://api.frankfurter.app https://api.exchangerate.host https://publicreporting.cftc.gov"
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; connect-src 'self' https://api.anthropic.com https://api.twelvedata.com https://api.stlouisfed.org https://api.binance.com https://fapi.binance.com https://api.coingecko.com https://api.alternative.me https://forex-data-feed.swissquote.com https://api.frankfurter.app https://api.exchangerate.host https://publicreporting.cftc.gov"
         }
       ]
     }
