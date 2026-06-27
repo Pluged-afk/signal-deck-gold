@@ -28,7 +28,7 @@ function loginPage(error) {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Signal Deck — private</title></head>
 <body style="margin:0;background:#020617;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-<form method="POST" action="/" style="background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:2.5rem 2rem;width:100%;max-width:340px;text-align:center;box-sizing:border-box;">
+<form method="POST" action="/api/login" style="background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:2.5rem 2rem;width:100%;max-width:340px;text-align:center;box-sizing:border-box;">
 <p style="font-size:20px;margin:0 0 4px;color:#fbbf24;font-weight:700;letter-spacing:0.06em;">✦ SIGNAL DECK</p>
 <p style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#475569;margin:0 0 1.75rem;">Private access only</p>
 <input name="pass" type="password" placeholder="Enter access code" autofocus autocomplete="current-password"
@@ -53,6 +53,11 @@ export default async function middleware(request) {
     });
   }
 
+  // The login function reads the POST body and sets the cookie (middleware
+  // cannot read request bodies), so let it through untouched.
+  const url = new URL(request.url);
+  if (url.pathname === "/api/login") return next();
+
   const token = await sha256(`${USER}:${PASS}`);
 
   // Already authenticated via session cookie → serve the app.
@@ -60,27 +65,6 @@ export default async function middleware(request) {
     return next();
   }
 
-  // Login form submission.
-  if (request.method === "POST") {
-    let pass = "";
-    try {
-      const body = await request.text();
-      pass = new URLSearchParams(body).get("pass") || "";
-    } catch (_) {}
-    if (pass === PASS) {
-      return new Response(null, {
-        status: 303,
-        headers: {
-          "Location": "/",
-          // Session cookie (no Max-Age) → cleared when the browser closes.
-          "Set-Cookie": `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax`,
-          "Cache-Control": "no-store",
-        },
-      });
-    }
-    return loginPage(true);
-  }
-
-  // Not authenticated → show the login page.
-  return loginPage(false);
+  // Not authenticated → show the login page (?e=1 marks a failed attempt).
+  return loginPage(url.searchParams.get("e") === "1");
 }
