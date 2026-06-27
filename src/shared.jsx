@@ -145,8 +145,8 @@ const pad = n => String(n).padStart(2,"0");
 const firstFriday = (y,m) => { const d=new Date(Date.UTC(y,m,1)); const off=(5-d.getUTCDay()+7)%7; return 1+off; };
 // 2026 FOMC decision dates (announcement day). Verify against the Fed calendar.
 const FOMC_2026 = ["2026-01-28","2026-03-18","2026-04-29","2026-06-17","2026-07-29","2026-09-16","2026-10-28","2026-12-09"];
-// 2026 ECB monetary-policy Governing Council dates (approx). Verify with ECB.
-const ECB_2026  = ["2026-02-05","2026-03-19","2026-04-30","2026-06-11","2026-07-23","2026-09-10","2026-10-29","2026-12-17"];
+// 2026 ECB monetary-policy Governing Council decision dates (confirmed).
+const ECB_2026  = ["2026-01-30","2026-03-06","2026-04-17","2026-06-05","2026-07-24","2026-09-11","2026-10-30","2026-12-18"];
 
 const nextMonthly = (dayFn) => {
   const now=new Date(); let y=now.getUTCFullYear(), m=now.getUTCMonth();
@@ -170,7 +170,7 @@ const EVENT_DEFS = {
   PCE:  { label:"US PCE (Fed's gauge)",  next:()=>nextMonthly(()=>28), approx:true },
   GDP:  { label:"US GDP",                next:()=>nextMonthly(()=>27), approx:true },
   FOMC: { label:"FOMC rate decision",    next:()=>nextFromList(FOMC_2026) },
-  ECB:  { label:"ECB rate decision",     next:()=>nextFromList(ECB_2026), approx:true },
+  ECB:  { label:"ECB rate decision",     next:()=>nextFromList(ECB_2026) },
   EUCPI:{ label:"Eurozone CPI (flash)",  next:()=>nextMonthly(()=>1), approx:true },
 };
 
