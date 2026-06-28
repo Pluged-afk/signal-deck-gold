@@ -7,6 +7,7 @@ import {
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
+import { runPreCheck, storeSignalForPrecheck, PrecheckCard, precheckSummary } from "./precheck";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
@@ -21,13 +22,17 @@ export default function AssetEngine({ config, onBack }) {
   const [ts,      setTs]      = useState(null);
   const [dataLog, setDataLog] = useState([]);
   const [showLog, setShowLog] = useState(false);
+  const [precheck, setPrecheck] = useState(null);
+  const [prechecking, setPrechecking] = useState(false);
   const logRef = useRef([]);
 
   const addLog = msg => { logRef.current=[...logRef.current,`[${new Date().toLocaleTimeString()}] ${msg}`]; setDataLog([...logRef.current]); };
 
+  const events = upcomingEvents(config.events);
+
   const fetchSignal = useCallback(async () => {
     if(!keys.anthropic){ setError("Anthropic API key required."); setKeysSet(false); return; }
-    setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
+    setPrecheck(null); setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
     try{
       const { pkg, price, session, meta } = await config.pipeline({ keys, addLog });
       addLog("Sending to AI for news + synthesis...");
@@ -40,14 +45,24 @@ export default function AssetEngine({ config, onBack }) {
       if(!parsed.price && price) parsed.price = String(price);
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
+      try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally{ setLoading(false); }
   }, [keys, config]);
 
+  // Free local pre-check first; only call the paid signal if all conditions pass.
+  const attemptSignal = useCallback(async () => {
+    if(!keys.anthropic){ setError("Anthropic API key required."); setKeysSet(false); return; }
+    setPrechecking(true); setError(null);
+    const res = await runPreCheck({ config, keys, events });
+    setPrechecking(false);
+    setPrecheck({ ...res, ts:Date.now() });
+    if(res.pass) fetchSignal();
+  }, [keys, config, events, fetchSignal]);
+
   const as = sig?aStyl(sig.action):{};
   const sc = sig?.scorecard||{};
   const wknd = isWeekend();
-  const events = upcomingEvents(config.events);
 
   // Themed buttons
   const primaryBtn = { padding:"8px 18px", background:"#1e293b", border:`1px solid ${T.accent}`, borderRadius:8, color:T.accentText, fontSize:12, cursor:"pointer", ...mono };
@@ -68,7 +83,7 @@ export default function AssetEngine({ config, onBack }) {
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {ts&&<span style={{...mono,fontSize:11,color:"#475569"}}>{ts.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>}
-          {keysSet&&<button onClick={fetchSignal} disabled={loading} style={primaryBtn}>{loading?"Scanning...":"Refresh ↗"}</button>}
+          {keysSet&&<button onClick={attemptSignal} disabled={loading||prechecking} style={primaryBtn}>{prechecking?"Checking...":loading?"Scanning...":"Refresh ↗"}</button>}
           <button onClick={()=>setKeysSet(false)} style={ghostBtn}>⚙ Keys</button>
         </div>
       </div>
@@ -80,6 +95,16 @@ export default function AssetEngine({ config, onBack }) {
           {config.weekendNote.lines.map((l,i)=><span key={i} style={{fontSize:11,color:"#d97706",...mono,display:"block"}}>· {l}</span>)}
           <p style={{fontSize:11,color:T.accentText,...mono,margin:"6px 0 0"}}>→ {config.weekendNote.rec}</p>
         </div>
+      )}
+
+      {/* Pre-check status + blocked card (free local gate before the paid call) */}
+      {precheck&&!loading&&(
+        <p style={{...mono,fontSize:10,color:"#475569",margin:"0 0 8px",textAlign:"right"}}>
+          Last pre-check: just now — {precheckSummary(precheck)}{precheck.pass?" ✓":""}
+        </p>
+      )}
+      {precheck&&!precheck.pass&&!loading&&(
+        <PrecheckCard result={precheck} pricePrefix={config.pricePrefix} onOverride={fetchSignal}/>
       )}
 
       {/* Key Setup */}
@@ -107,11 +132,11 @@ export default function AssetEngine({ config, onBack }) {
       )}
 
       {/* Ready */}
-      {keysSet&&!sig&&!loading&&!error&&(
+      {keysSet&&!sig&&!loading&&!error&&!(precheck&&!precheck.pass)&&(
         <div style={{...card,textAlign:"center",padding:"2.5rem 1.5rem"}}>
           <p style={{...mono,fontSize:13,color:"#64748b",margin:"0 0 8px"}}>{config.name} ready</p>
           {config.readyLines(keys).map((l,i)=><p key={i} style={{fontSize:11,color:"#475569",margin:"0 0 4px"}}>{l}</p>)}
-          <button onClick={fetchSignal} style={{...primaryBtn,marginTop:12}}>Run Analysis ↗</button>
+          <button onClick={attemptSignal} style={{...primaryBtn,marginTop:12}}>Run Analysis ↗</button>
         </div>
       )}
 
@@ -133,7 +158,7 @@ export default function AssetEngine({ config, onBack }) {
         <div style={{...card,background:"#1a0505",border:"1px solid #7f1d1d",marginBottom:10}}>
           <p style={{fontWeight:600,fontSize:13,color:"#f87171",margin:"0 0 4px"}}>Error</p>
           <p style={{fontSize:12,color:"#fca5a5",margin:"0 0 8px"}}>{error}</p>
-          <button onClick={fetchSignal} style={{...primaryBtn,fontSize:11}}>Retry ↗</button>
+          <button onClick={attemptSignal} style={{...primaryBtn,fontSize:11}}>Retry ↗</button>
         </div>
       )}
 

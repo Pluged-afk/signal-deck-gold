@@ -54,6 +54,11 @@ const GOLD = {
     { field:"fred",      label:"FRED API Key",      hint:"real yield + DXY (free, instant)", ph:"abcdef123456..." },
   ],
   session:getFxSession,
+  quickPrice: async (keys) => {
+    if(keys.td){ try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price>100) return {price:p2(d.price),src:"Twelve Data"}; }catch(_){} }
+    try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"); if(r.ok){const d=await r.json();if(d?.["pax-gold"]?.usd>100) return {price:p2(d["pax-gold"].usd),src:"CoinGecko"};} }catch(_){}
+    return null;
+  },
   sessionsGuide:[
     { window:"08:00–10:00 UTC", label:"London Open — high volume, best signals", quality:"best" },
     { window:"13:00–16:00 UTC", label:"EU-US Overlap — peak liquidity", quality:"best" },
@@ -277,6 +282,11 @@ const EUR = {
     { field:"fred",      label:"FRED API Key",      hint:"DXY + Fed funds + 10Y (free)", ph:"abcdef123456..." },
   ],
   session:getFxSession,
+  quickPrice: async (keys) => {
+    if(keys.td){ try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price>0.5) return {price:p5(d.price),src:"Twelve Data"}; }catch(_){} }
+    try{ const r=await fetch("https://api.frankfurter.app/latest?from=EUR&to=USD"); if(r.ok){const d=await r.json();if(d?.rates?.USD>0.5) return {price:p5(d.rates.USD),src:"Frankfurter"};} }catch(_){}
+    return null;
+  },
   sessionsGuide:[
     { window:"08:00–10:00 UTC", label:"London Open — highest EUR/USD volume", quality:"best" },
     { window:"13:00–16:00 UTC", label:"EU-US Overlap — most reliable breakouts", quality:"best" },
@@ -496,6 +506,11 @@ const BTC = {
   ],
   dataNote:"BTC technicals come from Binance + CoinGecko (free, no key). Only the Anthropic key is needed.",
   session:getCryptoSession,
+  quickPrice: async () => {
+    try{ const r=await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"); if(r.ok){const d=await r.json();if(+d.price>1000) return {price:p2(d.price),src:"Binance"};} }catch(_){}
+    try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"); if(r.ok){const d=await r.json();if(d?.bitcoin?.usd>1000) return {price:p2(d.bitcoin.usd),src:"CoinGecko"};} }catch(_){}
+    return null;
+  },
   sessionsGuide:[
     { window:"13:00–16:00 UTC", label:"EU-US Overlap — best breakouts", quality:"best" },
     { window:"16:00–21:00 UTC", label:"US Session — highest volume", quality:"best" },
