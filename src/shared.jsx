@@ -225,6 +225,35 @@ export async function runAI({ apiKey, system, userContent, addLog, model="claude
   return finalText;
 }
 
+// ─── WAIT Alert System — appended to every asset's system prompt ─────────────
+export const WAIT_RULES = `
+
+═══ WAIT ALERT SYSTEM — REQUIRED ON EVERY RESPONSE ═══
+You MUST always include a "wait_type" string and a "triggers" object — for LONG and SHORT too, not only WAIT.
+
+wait_type = one of:
+- "binary_event"  : a binary event (FOMC/CPI/NFP/PCE/ECB) is within 24h
+- "low_confidence" : signal quality <50 or the timeframes/indicators conflict
+- "no_setup"      : market ranging, no clear direction
+- "wrong_session" : off-peak / low-volume window
+- "none"          : use this for any LONG or SHORT signal
+
+triggers — be SPECIFIC and ACTIONABLE. Use the pre-computed swing S/R, fib levels, round numbers, session windows, ADX, patterns, funding/F&G and Asian range provided above as concrete trigger values. 4h candles close at 00:00/04:00/08:00/12:00/16:00/20:00 UTC.
+- watch_long / watch_long_note: price where a LONG likely fires (key support being tested) + why
+- watch_short / watch_short_note: price where a SHORT likely fires (key resistance) + why
+- invalidation / invalidation_note: the level that changes the thesis + what its break means
+- next_session ("HH:MM UTC") / next_session_note: next high-volume session + why it is better
+- news_time ("HH:MM UTC" or "none") / news_event: scheduled news today + its name
+- candle_close ("HH:MM UTC") / candle_close_note: the next important 1h/4h close + why
+- mtf_fix: what must change in 4h/1h/15m alignment to fire (reference the ACTUAL current trends)
+- pattern_needed: the exact candle pattern + price/level that would confirm entry
+- indicator_needed: the exact indicator condition (e.g. "1h RSI 65+, currently 52 and rising")
+- primary_reason / secondary_reason: the main + second reason ("none" if only one)
+- estimated_clarity: when the market likely becomes clearer (a real time or level)
+- refresh_recommendation: ONE specific actionable line. GOOD: "Refresh at 16:00 UTC (4h close) OR immediately if price touches 4050 resistance — whichever first". BAD: "refresh in 1 hour" / "monitor the market".
+
+For LONG/SHORT: watch_long/watch_short may be "n/a", but invalidation, invalidation_note, news_time/news_event and a refresh_recommendation (e.g. "hold; re-check at the next 4h close or if price hits the invalidation level") are still REQUIRED.`;
+
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
 export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };

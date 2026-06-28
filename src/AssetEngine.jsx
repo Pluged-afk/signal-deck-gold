@@ -3,9 +3,10 @@ import {
   mono, card, lbl, fmt, inputStyle,
   aStyl, rStyl, cCol, sCol, qCol,
   parseJSON, runAI, isWeekend, upcomingEvents,
-  loadKeys, saveKeys,
+  loadKeys, saveKeys, WAIT_RULES,
 } from "./shared";
 import TACards from "./TACards";
+import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
@@ -30,7 +31,7 @@ export default function AssetEngine({ config, onBack }) {
     try{
       const { pkg, price, session, meta } = await config.pipeline({ keys, addLog });
       addLog("Sending to AI for news + synthesis...");
-      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system, userContent:pkg, addLog });
+      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
       config.merge(parsed, meta);
@@ -152,6 +153,7 @@ export default function AssetEngine({ config, onBack }) {
                 <span style={{...mono,fontSize:11,color:qCol(sig.session_quality),padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>{sig.session}{sig.session_quality?` · ${sig.session_quality}`:""}</span>
                 {sig.passes!==undefined&&(()=>{const need=Math.ceil(config.passesOf*0.6);return <span style={{...mono,fontSize:11,color:sig.passes>=need?"#4ade80":sig.passes>=need-1?"#fbbf24":"#f87171"}}>{sig.passes}/{config.passesOf} confirmed</span>;})()}
                 {sig.signal_quality&&<span style={{...mono,fontSize:11,color:T.accentText,padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>Q {sig.signal_quality}</span>}
+                {sig.action==="WAIT"&&sig.wait_type&&sig.wait_type!=="none"&&<span style={{...mono,fontSize:11,fontWeight:600,color:waitTypeMeta(sig.wait_type).col}}>{waitTypeMeta(sig.wait_type).label}</span>}
               </div>
             </div>
             <div style={{textAlign:"right"}}>
@@ -166,8 +168,12 @@ export default function AssetEngine({ config, onBack }) {
           )}
         </div>
 
-        {/* Entry + Levels */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        {/* WAIT → watch-for card replaces the entry plan; LONG/SHORT → invalidation card */}
+        {sig.action==="WAIT" && <WaitCard sig={sig} pricePrefix={config.pricePrefix}/>}
+        {sig.action!=="WAIT" && <InvalidationCard sig={sig} pricePrefix={config.pricePrefix}/>}
+
+        {/* Entry + Levels (hidden on WAIT — there is no trade to plan) */}
+        {sig.action!=="WAIT" && (<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
           <div style={card}>
             <p style={lbl}>Entry Plan</p>
             {[
@@ -198,7 +204,7 @@ export default function AssetEngine({ config, onBack }) {
               </div>
             ))}
           </div>
-        </div>
+        </div>)}
 
         {/* Asset-specific panels (macro / derivatives / rates) */}
         {config.extraPanels(sig)}
