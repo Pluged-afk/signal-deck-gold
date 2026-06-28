@@ -9,6 +9,13 @@ import {
   getFxSession, getCryptoSession,
   f1, f2, f3, na, rsiLbl, volLbl,
 } from "./shared";
+import { analyzeTimeframes, signalQuality, taPromptBlock } from "./ta";
+
+// Two scorecard rows shared by every asset (multi-timeframe + candle patterns).
+const TA_ROWS = [
+  { key:"candles", label:"9. Candle Patterns" },
+  { key:"mtf",     label:"10. MTF Alignment (4h/1h/15m)" },
+];
 
 const ff = v => (v||v===0) ? v.toFixed(5) : "n/a"; // forex 5-dp formatter
 
@@ -21,8 +28,21 @@ const Stat = ({ title, value, color="#e2e8f0", sub }) => (
   </div>
 );
 
+// Inject locally-computed TA into the parsed signal for the UI, compute the
+// 0–100 quality score, and backfill S/R from swing levels if the AI left blanks.
+function mergeTA(p, ta, fnum) {
+  if (!ta) return;
+  p._ta = ta;
+  const q = signalQuality(p, ta);
+  p.signal_quality = `${q.score}/100`;
+  p._quality = q;
+  if ((!p.support || p.support === "") && ta.sr.support[0]) p.support = fnum(ta.sr.support[0].level);
+  if ((!p.resistance || p.resistance === "") && ta.sr.resistance[0]) p.resistance = fnum(ta.sr.resistance[0].level);
+  if (!p.entry_type && ta.entries) p.entry_type = ta.entries.recommended;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
-// ASSET 1 — GOLD (XAU/USD)  [unchanged 8-step COT engine]
+// ASSET 1 — GOLD (XAU/USD) — 10-step engine with multi-timeframe TA
 // ════════════════════════════════════════════════════════════════════════════
 const GOLD = {
   id:"gold", name:"SIGNAL DECK GOLD", symbol:"XAU/USD", headerNote:"XAU/USD · 8-Step · Real APIs",
@@ -49,7 +69,7 @@ const GOLD = {
     "Price already 25%+ toward T1 → skip, wait for pullback","T1 hit → close 50%, move stop to entry immediately",
     "Exit 100% before any FOMC / CPI / NFP / PCE release","COT net >200k + resistance = high SHORT probability — respect it",
   ],
-  scTitle:"8-Step Scorecard", passesOf:8,
+  scTitle:"10-Step Scorecard", passesOf:10,
   scRows:[
     { key:"price",     label:"1. Price & VWAP" },
     { key:"macd",      label:"2. MACD 1h/4h/Daily" },
@@ -59,6 +79,7 @@ const GOLD = {
     { key:"cot",       label:"6. COT Positioning" },
     { key:"history",   label:"7. Levels / Context" },
     { key:"news",      label:"8. News / Macro" },
+    ...TA_ROWS,
   ],
   readyLines:(k)=>[
     k.td?"✓ Twelve Data (MACD/RSI/ATR/VWAP/Volume/200MA)":"⚠ No Twelve Data — AI inference only",
@@ -111,7 +132,10 @@ YOUR JOB (web search only for these):
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/NFP/PCE) within 24h → WAIT, no exceptions
-- ≥5 of 8 confirm same direction → LONG or SHORT. <5 = WAIT
+- ≥6 of 10 confirm same direction → LONG or SHORT. <6 = WAIT
+- MULTI-TIMEFRAME MASTER RULE: never trade against the 4h trend. 1h must confirm 4h. If 4h and 1h conflict → WAIT, no exceptions. 15m is for entry timing only.
+- A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
+- SIGNAL QUALITY: <50 = WAIT regardless of everything else; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH (rare).
 - Three-timeframe MACD alignment is a strong standalone signal — weight it heavily
 - DXY and yield conflict → confidence capped at MEDIUM
 - Low volume breakout → confidence capped at MEDIUM
@@ -121,7 +145,7 @@ SIGNAL RULES:
 - Off-peak session + no strong catalyst → cap confidence at MEDIUM
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"}},"reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`,
+{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`,
 
   pipeline: async ({ keys, addLog }) => {
     const tdCandles = async (interval, outputsize=100) => {
@@ -129,7 +153,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const d=await r.json();
       if(d.status==="error") throw new Error(`Twelve Data: ${d.message}`);
       const v=(d.values||[]).reverse();
-      return { closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
+      return { opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
     const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`); const d=await r.json(); return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null; };
 
@@ -141,8 +165,10 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(!spot) throw new Error("Could not fetch gold spot price from any source.");
     addLog(`Spot: $${spot.price} (${spot.src})`);
 
-    let td=null;
+    let td=null, ta=null;
     if(keys.td){ try{
+      addLog("Fetching 15m candles (entry/pullback)...");
+      const c15=await tdCandles("15min",100);
       addLog("Fetching 1h candles...");
       const c1h=await tdCandles("1h",100);
       const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
@@ -155,9 +181,14 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       addLog("Fetching daily candles (200MA)...");
       const c1d=await tdCandles("1day",210);
       const ma200=calcSMA(c1d.closes,200), macdD=calcMACD(c1d.closes), rsiD=calcRSI(c1d.closes), volD=calcVolRatio(c1d.volumes);
+      const dailyAtr=calcATR(c1d.highs,c1d.lows,c1d.closes);
       const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
       const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
-      td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,h24,l24, bullMacd:bull, bearMacd:3-bull };
+      // round numbers within $30 (gold respects these strongly)
+      const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
+      td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, bullMacd:bull, bearMacd:3-bull };
+      ta=analyzeTimeframes({ c15, c1h, c4h, price:spot.price, atr4h });
+      addLog(`MTF → 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
     let macro={nominal:null,tips:null,realYield:null,dxy:null};
@@ -210,12 +241,17 @@ MACRO — FRED  10Y Nominal:${na(macro.nominal)}% | Real Yield:${na(macro.realYi
 
 COT — CFTC Managed Money  Net:${cot?.netMM?.toLocaleString()??"n/a"} | WeekΔ:${cot?.weekChange?.toLocaleString()??"n/a"} | ${na(cot?.sentiment)} (>200k crowded long=bearish, <50k crowded short=bullish)
 
+GOLD CONTEXT  Daily ATR:$${f2(td?.dailyAtr)} (${td?.dailyAtr>40?"HIGH vol — widen stops":td?.dailyAtr<20?"LOW vol — tight ranges":"normal"}) | Round numbers near price: ${td?.rounds?.length?td.rounds.map(r=>"$"+r).join(", "):"none within $30"}
+  Session candle note: London open (08-09 UTC) often false-breaks then reverses — wait for the 2nd candle. NY open (13:30-14:30 UTC) is the most reliable candle of the day.
+
+${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no Twelve Data key — score candles & mtf NEUTRAL)"}
+
 === YOUR JOB: search news, key S/R levels, binary events, Fed speakers → output JSON ===`;
 
-    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, cot, stopAmt, stopPct } };
+    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, cot, stopAmt, stopPct, ta } };
   },
   merge:(p,m)=>{
-    const { td, macro, cot } = m;
+    const { td, macro, cot, ta } = m;
     if(td?.h24&&!p.high_24h) p.high_24h=String(td.h24);
     if(td?.l24&&!p.low_24h)  p.low_24h=String(td.l24);
     if(td?.ma200)            p.ma200=td.ma200.toFixed(2);
@@ -224,6 +260,7 @@ COT — CFTC Managed Money  Net:${cot?.netMM?.toLocaleString()??"n/a"} | WeekΔ:
     if(macro.dxy!==null)       p.dxy=String(macro.dxy);
     if(cot&&!p.cot_net)        p.cot_net=cot.netMM?.toLocaleString();
     if(cot&&!p.cot_sentiment)  p.cot_sentiment=cot.sentiment;
+    mergeTA(p, ta, v=>v.toFixed(2));
   },
 };
 
@@ -256,7 +293,7 @@ const EUR = {
     "Minimum R:R 1:2","DXY direction is the dominant filter — never fight it",
     "Avoid Asian session — EUR/USD is choppy and thin","At 0.01 lots, 1 pip ≈ $0.10 — small account can use 0.02-0.05 lots",
   ],
-  scTitle:"8-Step Scorecard", passesOf:8,
+  scTitle:"10-Step Scorecard", passesOf:10,
   scRows:[
     { key:"price",  label:"1. Price vs VWAP/EMAs" },
     { key:"macd",   label:"2. MACD 1h/4h" },
@@ -266,6 +303,7 @@ const EUR = {
     { key:"data",   label:"6. Economic data" },
     { key:"levels", label:"7. Levels / Pivots" },
     { key:"news",   label:"8. News / Risk sentiment" },
+    ...TA_ROWS,
   ],
   readyLines:(k)=>[
     k.td?"✓ Twelve Data (MACD/RSI/ATR/EMA50/EMA200/VWAP/pivots)":"⚠ No Twelve Data — AI inference only",
@@ -329,13 +367,16 @@ KEY EUR/USD LOGIC:
 
 SIGNAL RULES:
 - Binary event (ECB/FOMC/US CPI/NFP/Eurozone CPI) within 24h → WAIT.
-- ≥5 of 8 confirm same direction → LONG or SHORT. <5 = WAIT.
+- ≥6 of 10 confirm same direction → LONG or SHORT. <6 = WAIT
+- MULTI-TIMEFRAME MASTER RULE: never trade against the 4h trend. 1h must confirm 4h. If 4h and 1h conflict → WAIT, no exceptions. 15m is for entry timing only.
+- A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
+- SIGNAL QUALITY: <50 = WAIT regardless of everything else; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH (rare)..
 - DXY step conflicting with MACD/price → cap confidence at MEDIUM.
 - Asian session with no catalyst → cap confidence at MEDIUM.
 - Stop: use the ATR-based pip value provided. T1 min 1.5× ATR, T2 min 2.5× ATR. R:R <1:2 → WAIT.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"1.XXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXX","entry_note":"brief","stop":"1.XXXX","stop_note":"1.5x ATR","stop_pct":"45 pips","t1":"1.XXXX","t2":"1.XXXX","rr":"1:2.5","high_24h":"1.XXXX","low_24h":"1.XXXX","vwap":"1.XXXX","ema50":"1.XXXX","ema200":"1.XXXX","pivot":"1.XXXX","support":"1.XXXX","resistance":"1.XXXX","dxy":"XXX.XX — falling","rate_diff":"Fed > ECB by ~2%","fed_bias":"hawkish hold","ecb_bias":"dovish","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rates":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"data":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"}},"reasoning":"2 sentences","exits":["T1 X.XXXX — close 50% move stop to entry","T2 X.XXXX — close rest","Stop X.XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`,
+{"action":"LONG|SHORT|WAIT","price":"1.XXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXX","entry_note":"brief","stop":"1.XXXX","stop_note":"1.5x ATR","stop_pct":"45 pips","t1":"1.XXXX","t2":"1.XXXX","rr":"1:2.5","high_24h":"1.XXXX","low_24h":"1.XXXX","vwap":"1.XXXX","ema50":"1.XXXX","ema200":"1.XXXX","pivot":"1.XXXX","support":"1.XXXX","resistance":"1.XXXX","dxy":"XXX.XX — falling","rate_diff":"Fed > ECB by ~2%","fed_bias":"hawkish hold","ecb_bias":"dovish","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rates":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"data":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 X.XXXX — close 50% move stop to entry","T2 X.XXXX — close rest","Stop X.XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`,
 
   pipeline: async ({ keys, addLog }) => {
     const tdCandles = async (interval, outputsize=100) => {
@@ -343,7 +384,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const d=await r.json();
       if(d.status==="error") throw new Error(`Twelve Data: ${d.message}`);
       const v=(d.values||[]).reverse();
-      return { closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
+      return { opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
     const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`); const d=await r.json(); return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null; };
 
@@ -355,23 +396,31 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(!spot) throw new Error("Could not fetch EUR/USD price from any source.");
     addLog(`Spot: ${spot.price} (${spot.src})`);
 
-    let td=null;
+    let td=null, ta=null;
     if(keys.td){ try{
+      addLog("Fetching 15m candles (entry/pullback)...");
+      const c15=await tdCandles("15min",100);
       addLog("Fetching 1h candles...");
       const c1h=await tdCandles("1h",100);
       const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes);
       const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
+      const ema50_1h=calcEMAlast(c1h.closes,50);
       addLog(`1h → MACD:${macd1h.macd?.toFixed(5)} RSI:${rsi1h.toFixed(1)}`);
       addLog("Fetching 4h candles (EMA50/200 + ATR)...");
       const c4h=await tdCandles("4h",250);
       const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes);
       const ema50=calcEMAlast(c4h.closes,50), ema200=calcEMAlast(c4h.closes,200);
       addLog("Fetching daily candle (pivots)...");
-      const c1d=await tdCandles("1day",5);
+      const c1d=await tdCandles("1day",30);
       const n=c1d.closes.length; const pv=n>=2?calcPivots(c1d.highs[n-2],c1d.lows[n-2],c1d.closes[n-2]):null;
       const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
-      td={ macd1h,rsi1h,vwap, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24 };
-      addLog(`4h → ATR:${atr4h?.toFixed(5)} EMA50:${ema50?.toFixed(5)} EMA200:${ema200?.toFixed(5)}`);
+      // daily range exhaustion: today's pips vs 20-day avg range
+      const todayPips=Math.round((h24-l24)*10000);
+      const avgRange=c1d.highs.slice(-21,-1).map((h,i)=>h-c1d.lows.slice(-21,-1)[i]).reduce((a,b)=>a+b,0)/20;
+      const avgPips=Math.round(avgRange*10000); const rangeUsed=avgPips?Math.round(todayPips/avgPips*100):null;
+      td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed };
+      ta=analyzeTimeframes({ c15, c1h, c4h, price:spot.price, atr4h });
+      addLog(`MTF → 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
     let macro={dxy:null,fedfunds:null,dgs10:null};
@@ -407,12 +456,18 @@ ATR & STOP (4h)  ATR:${ff(td?.atr4h)} | Recommended stop: ${ff(stopAmt)} (${stop
 MACRO — FRED  DXY (Fed TWI):${na(macro.dxy)} | Fed Funds:${na(macro.fedfunds)}% | US 10Y:${na(macro.dgs10)}%
   (DXY is ~95% inverse to EUR/USD — rising DXY = bearish EUR. Use web search for ECB policy rate & latest decisions to compute the Fed-vs-ECB differential.)
 
+EUR/USD CONTEXT  50 EMA (1h):${ff(td?.ema50_1h)} → price ${td?.ema50_1h?(spot.price>td.ema50_1h?"ABOVE (short-term bullish)":"BELOW (short-term bearish)"):"unknown"}
+  Daily range used: ${td?.rangeUsed!=null?`${td.rangeUsed}% (${td.todayPips}/${td.avgPips} pips avg)`+(td.rangeUsed>80?" — RANGE EXHAUSTED, avoid new entries":""):"n/a"}
+  Session note: Asian (00-08 UTC) barely moves — ignore. London open (08-09) sets the range but often reverses — wait for 2nd candle. NY (13:30) often reverses London ("London close trap"). Best candles: 13-16 UTC overlap.
+
+${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no Twelve Data key — score candles & mtf NEUTRAL)"}
+
 === YOUR JOB: search ECB/Fed guidance, CPI differential, data releases, key S/R, binary events → output JSON ===`;
 
-    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, stopPips } };
+    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, stopPips, ta } };
   },
   merge:(p,m)=>{
-    const { td, macro } = m;
+    const { td, macro, ta } = m;
     if(td?.h24&&!p.high_24h) p.high_24h=td.h24.toFixed(5);
     if(td?.l24&&!p.low_24h)  p.low_24h=td.l24.toFixed(5);
     if(td?.vwap&&!p.vwap)    p.vwap=td.vwap.toFixed(5);
@@ -420,6 +475,7 @@ MACRO — FRED  DXY (Fed TWI):${na(macro.dxy)} | Fed Funds:${na(macro.fedfunds)}
     if(td?.ema200)           p.ema200=td.ema200.toFixed(5);
     if(td?.pivots?.P&&!p.pivot) p.pivot=td.pivots.P.toFixed(5);
     if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=String(macro.dxy);
+    mergeTA(p, ta, v=>v.toFixed(5));
   },
 };
 
@@ -452,7 +508,7 @@ const BTC = {
     "Minimum R:R 1:2.5 (higher than gold due to volatility)","Never hold through FOMC / CPI",
     "2-loss rule: two consecutive losses → stop trading BTC for 24h","Funding >+0.1%/8h at resistance = contrarian SHORT setup",
   ],
-  scTitle:"8-Step Scorecard", passesOf:8,
+  scTitle:"10-Step Scorecard", passesOf:10,
   scRows:[
     { key:"price",      label:"1. Price & 24h range" },
     { key:"macd",       label:"2. MACD 1h/4h" },
@@ -462,6 +518,7 @@ const BTC = {
     { key:"dominance",  label:"6. BTC dominance" },
     { key:"levels",     label:"7. Levels (round #s)" },
     { key:"news",       label:"8. News + Fear/Greed" },
+    ...TA_ROWS,
   ],
   readyLines:()=>[
     "✓ Binance (price, OHLCV, funding, open interest) — free",
@@ -524,21 +581,24 @@ KEY BTC LOGIC:
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/PCE) within 24h → WAIT (never hold BTC through macro).
-- ≥5 of 8 confirm same direction → LONG or SHORT. <5 = WAIT.
+- ≥6 of 10 confirm same direction → LONG or SHORT. <6 = WAIT
+- MULTI-TIMEFRAME MASTER RULE: never trade against the 4h trend. 1h must confirm 4h. If 4h and 1h conflict → WAIT, no exceptions. 15m is for entry timing only.
+- A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
+- SIGNAL QUALITY: <50 = WAIT regardless of everything else; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH (rare)..
 - Funding >+0.1% + price at resistance = high-probability SHORT.
 - Stop: use the ATR-based value provided (do not widen). T1 min 1.5× ATR, T2 min 2.5× ATR.
 - Minimum R:R 1:2.5 for BTC. R:R <1:2.5 → WAIT.
 - Weekend/low-volume + no catalyst → cap confidence at MEDIUM.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"XXXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXXX.XX","entry_note":"brief","stop":"XXXXX.XX","stop_note":"1.5x ATR","stop_pct":"2.1","t1":"XXXXX.XX","t2":"XXXXX.XX","rr":"1:2.5","high_24h":"XXXXX.XX","low_24h":"XXXXX.XX","support":"XXXXX.XX","resistance":"XXXXX.XX","sma200":"XXXXX.XX","funding_rate":"0.010%","open_interest":"XXXXX BTC","btc_dominance":"55.8%","fear_greed":"15 Extreme Fear","etf_flow":"+$250M IBIT","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_sma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"funding_oi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"etf":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dominance":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"}},"reasoning":"2 sentences","exits":["T1 $XXXXX — close 50% move stop to entry","T2 $XXXXX — close rest","Stop $XXXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`,
+{"action":"LONG|SHORT|WAIT","price":"XXXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXXX.XX","entry_note":"brief","stop":"XXXXX.XX","stop_note":"1.5x ATR","stop_pct":"2.1","t1":"XXXXX.XX","t2":"XXXXX.XX","rr":"1:2.5","high_24h":"XXXXX.XX","low_24h":"XXXXX.XX","support":"XXXXX.XX","resistance":"XXXXX.XX","sma200":"XXXXX.XX","funding_rate":"0.010%","open_interest":"XXXXX BTC","btc_dominance":"55.8%","fear_greed":"15 Extreme Fear","etf_flow":"+$250M IBIT","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_sma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"funding_oi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"etf":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dominance":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXXX — close 50% move stop to entry","T2 $XXXXX — close rest","Stop $XXXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"]}`,
 
   pipeline: async ({ keys, addLog }) => {
     const klines = async (interval, limit=100) => {
       const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
       if(!r.ok) throw new Error(`Binance klines ${r.status}`);
       const d=await r.json();
-      return { closes:d.map(k=>parseFloat(k[4])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), volumes:d.map(k=>parseFloat(k[5])) };
+      return { opens:d.map(k=>parseFloat(k[1])), closes:d.map(k=>parseFloat(k[4])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), volumes:d.map(k=>parseFloat(k[5])) };
     };
 
     addLog("Fetching BTC 24h ticker (Binance)...");
@@ -551,8 +611,10 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(!spot) throw new Error("Could not fetch BTC price from Binance or CoinGecko.");
     addLog(`Spot: $${spot.price} (${spot.src}) ${chg!=null?`24h ${chg>0?"+":""}${chg}%`:""}`);
 
-    let td=null;
+    let td=null, ta=null;
     try{
+      addLog("Fetching 15m klines (entry/pullback)...");
+      const c15=await klines("15m",100);
       addLog("Fetching 1h klines...");
       const c1h=await klines("1h",100);
       const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), vol1h=calcVolRatio(c1h.volumes);
@@ -563,8 +625,15 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       addLog("Fetching daily klines (200 SMA)...");
       const c1d=await klines("1d",220);
       const sma200=calcSMA(c1d.closes,200);
-      td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200 };
-      addLog(`4h → ATR:$${atr4h?.toFixed(0)} | 200SMA:$${sma200?.toFixed(0)}`);
+      // weekly candle direction (first weekly kline is the current week)
+      let weeklyDir="n/a"; try{ const w=await klines("1w",2); const i=w.closes.length-1; weeklyDir=w.closes[i]>=w.opens[i]?"BULLISH":"BEARISH"; }catch(_){}
+      // whale wick on the latest 4h candle: wick > 3× body
+      const li=c4h.closes.length-1; const body=Math.abs(c4h.closes[li]-c4h.opens[li])||1e-9;
+      const upW=c4h.highs[li]-Math.max(c4h.opens[li],c4h.closes[li]), loW=Math.min(c4h.opens[li],c4h.closes[li])-c4h.lows[li];
+      const whaleWick=(upW>3*body||loW>3*body)?(upW>loW?"upper (rejection — bearish)":"lower (absorption — bullish)"):null;
+      td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick };
+      ta=analyzeTimeframes({ c15, c1h, c4h, price:spot.price, atr4h });
+      addLog(`MTF → 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); }
 
     addLog("Fetching funding + open interest...");
@@ -606,13 +675,18 @@ MARKET STRUCTURE  BTC Dominance: ${dom!=null?dom.toFixed(1)+"%":"n/a"} | Fear & 
 
 ATR & STOP (4h)  ATR:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na(stopPct)}%, 1.5x ATR) — BTC stops are large, size position accordingly
 
+BTC CONTEXT  Weekly candle: ${td?.weeklyDir||"n/a"} (first weekly candle has 60%+ predictive value for the week) | Whale wick (4h): ${td?.whaleWick||"none"}
+  Funding+pattern combo: funding ${funding!=null?funding.toFixed(4)+"%":"n/a"} ${funding>0.1?"+ bearish candle at resistance = STRONG SHORT":funding<-0.05?"+ bullish candle at support = STRONG LONG":""}. 4h volume >300% avg = institutional move, weight heavily.
+
+${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable — score candles & mtf NEUTRAL"}
+
 === YOUR JOB: search BTC spot ETF daily flows (IBIT/FBTC — MOST IMPORTANT), whale/on-chain, regulatory news, Nasdaq/VIX risk tone, key round-number S/R, binary events → output JSON ===`;
 
     return { pkg, price:spot.price, src:spot.src, session,
-      meta:{ td, h24, l24, funding, oi, dom, fng, fngLabel } };
+      meta:{ td, h24, l24, funding, oi, dom, fng, fngLabel, ta } };
   },
   merge:(p,m)=>{
-    const { td, h24, l24, funding, oi, dom, fng, fngLabel } = m;
+    const { td, h24, l24, funding, oi, dom, fng, fngLabel, ta } = m;
     if(h24!=null&&!p.high_24h) p.high_24h=String(h24);
     if(l24!=null&&!p.low_24h)  p.low_24h=String(l24);
     if(td?.sma200)             p.sma200=td.sma200.toFixed(2);
@@ -620,6 +694,7 @@ ATR & STOP (4h)  ATR:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na
     if(oi!=null)               p.open_interest=`${Math.round(oi).toLocaleString()} BTC`;
     if(dom!=null)              p.btc_dominance=`${dom.toFixed(1)}%`;
     if(fng!=null&&(!p.fear_greed||p.fear_greed==="")) p.fear_greed=`${fng} ${fngLabel||""}`.trim();
+    mergeTA(p, ta, v=>v.toFixed(2));
   },
 };
 

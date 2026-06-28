@@ -5,6 +5,7 @@ import {
   parseJSON, runAI, isWeekend, upcomingEvents,
   loadKeys, saveKeys,
 } from "./shared";
+import TACards from "./TACards";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
@@ -149,7 +150,8 @@ export default function AssetEngine({ config, onBack }) {
               </div>
               <div style={{display:"flex",gap:8,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{...mono,fontSize:11,color:qCol(sig.session_quality),padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>{sig.session}{sig.session_quality?` · ${sig.session_quality}`:""}</span>
-                {sig.passes!==undefined&&<span style={{...mono,fontSize:11,color:sig.passes>=5?"#4ade80":sig.passes>=4?"#fbbf24":"#f87171"}}>{sig.passes}/{config.passesOf} confirmed</span>}
+                {sig.passes!==undefined&&(()=>{const need=Math.ceil(config.passesOf*0.6);return <span style={{...mono,fontSize:11,color:sig.passes>=need?"#4ade80":sig.passes>=need-1?"#fbbf24":"#f87171"}}>{sig.passes}/{config.passesOf} confirmed</span>;})()}
+                {sig.signal_quality&&<span style={{...mono,fontSize:11,color:T.accentText,padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>Q {sig.signal_quality}</span>}
               </div>
             </div>
             <div style={{textAlign:"right"}}>
@@ -200,6 +202,9 @@ export default function AssetEngine({ config, onBack }) {
 
         {/* Asset-specific panels (macro / derivatives / rates) */}
         {config.extraPanels(sig)}
+
+        {/* Multi-timeframe TA: quality, pattern alert, MTF table, fib, pullback, entries */}
+        <TACards sig={sig} T={T} pricePrefix={config.pricePrefix} decimals={config.pricePrefix===""?5:2}/>
 
         {/* Scorecard */}
         <div style={{...card,marginBottom:10}}>
