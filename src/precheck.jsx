@@ -10,8 +10,10 @@ export const COST_PER_CALL = 0.18; // € estimate shown as "saved" when skipped
 const MIN_INTERVAL_MIN = 45;
 
 const PC_KEY = id => `sdg_pc_${id}`;
+const STALE_MS = 24 * 3600000; // stored levels expire after 24h
 export const loadPC = id => { try { return JSON.parse(localStorage.getItem(PC_KEY(id)) || "{}"); } catch (_) { return {}; } };
 const savePC = (id, d) => { try { localStorage.setItem(PC_KEY(id), JSON.stringify(d)); } catch (_) {} };
+const clearPC = id => { try { localStorage.removeItem(PC_KEY(id)); } catch (_) {} };
 
 // Called after a successful full signal — remember the levels & timestamp so the
 // next pre-check can tell whether price is near anything actionable.
@@ -35,8 +37,11 @@ const dp = price => price < 10 ? 4 : 2; // EUR shows 4dp, gold/btc 2dp
 // Returns { pass, checks:[{name, ok, detail}], price, src, saved }
 export const runPreCheck = async ({ config, keys = {}, events }) => {
   const id = config.id;
-  const pc = loadPC(id);
   const now = Date.now();
+  let pc = loadPC(id);
+  // Expire levels older than 24h so yesterday's structure can't block today's signals.
+  let staleReset = false;
+  if (pc.lastRefresh && (now - pc.lastRefresh) > STALE_MS) { clearPC(id); pc = {}; staleReset = true; }
   const h = new Date().getUTCHours();
 
   // free spot price
@@ -50,7 +55,7 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
   // 2 — price near a stored key level
   let price2;
   if (!price) price2 = { name: "Price location", ok: true, detail: "price unavailable — allowed", price };
-  else if (!pc.levels?.length) price2 = { name: "Price location", ok: true, detail: "no stored levels yet (first run) — allowed", price };
+  else if (!pc.levels?.length) price2 = { name: "Price location", ok: true, detail: staleReset ? "stored levels expired (>24h) — reset, allowed" : "no stored levels yet (first run) — allowed", price };
   else {
     let best = null;
     pc.levels.forEach(l => { const d = Math.abs(price - l) / price; if (best === null || d < best.d) best = { l, d, abs: Math.abs(price - l) }; });
