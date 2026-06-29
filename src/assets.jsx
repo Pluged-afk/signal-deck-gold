@@ -282,7 +282,8 @@ const EUR = {
   session:getFxSession,
   quickPrice: async (keys) => {
     if(keys.td){ try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price>0.5) return {price:p5(d.price),src:"Twelve Data"}; }catch(_){} }
-    try{ const r=await fetch("https://api.frankfurter.app/latest?from=EUR&to=USD"); if(r.ok){const d=await r.json();if(d?.rates?.USD>0.5) return {price:p5(d.rates.USD),src:"Frankfurter"};} }catch(_){}
+    try{ const r=await fetch("https://open.er-api.com/v6/latest/EUR"); if(r.ok){const d=await r.json();if(d?.rates?.USD>0.5) return {price:p5(d.rates.USD),src:"open.er-api"};} }catch(_){}
+    try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=eur"); if(r.ok){const d=await r.json();const e=d?.tether?.eur;if(e>0.5) return {price:p5(1/e),src:"CoinGecko USDT/EUR"};} }catch(_){}
     return null;
   },
   sessionsGuide:[
@@ -398,8 +399,8 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     addLog("Fetching EUR/USD spot...");
     let spot=null;
     if(keys.td) try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>0.5) spot={price:p5(d.price),src:"Twelve Data"}; }catch(_){}
-    if(!spot) try{ const r=await fetch("https://api.frankfurter.app/latest?from=EUR&to=USD"); if(r.ok){const d=await r.json();const px=d?.rates?.USD;if(px>0.5) spot={price:p5(px),src:"Frankfurter"};} }catch(_){}
-    if(!spot) try{ const r=await fetch("https://api.exchangerate.host/latest?base=EUR&symbols=USD"); if(r.ok){const d=await r.json();const px=d?.rates?.USD;if(px>0.5) spot={price:p5(px),src:"exchangerate.host"};} }catch(_){}
+    if(!spot) try{ const r=await fetch("https://open.er-api.com/v6/latest/EUR"); if(r.ok){const d=await r.json();const px=d?.rates?.USD;if(px>0.5) spot={price:p5(px),src:"open.er-api"};} }catch(_){}
+    if(!spot) try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=eur"); if(r.ok){const d=await r.json();const e=d?.tether?.eur;if(e>0.5) spot={price:p5(1/e),src:"CoinGecko USDT/EUR"};} }catch(_){}
     if(!spot) throw new Error("Could not fetch EUR/USD price from any source.");
     addLog(`Spot: ${spot.price} (${spot.src})`);
 
