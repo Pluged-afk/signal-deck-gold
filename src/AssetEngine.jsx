@@ -3,7 +3,7 @@ import {
   mono, card, lbl, fmt, inputStyle,
   aStyl, rStyl, cCol, sCol, qCol,
   parseJSON, runAI, isWeekend, upcomingEvents,
-  loadKeys, saveKeys, WAIT_RULES, egyptWindow, urgencyCol,
+  loadKeys, saveKeys, WAIT_RULES, egyptWindow, urgencyCol, inWindow,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -325,15 +325,15 @@ export default function AssetEngine({ config, onBack }) {
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
         <div style={card}>
           <p style={lbl}>Best Trading Sessions</p>
-          {config.sessionsGuide.map((s,i)=>(
-            <div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:"1px solid #1e293b"}}>
+          {config.sessionsGuide.map((s,i)=>{const now=inWindow(s.window);return(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 6px",borderBottom:"1px solid #1e293b",background:now?"#0a1f12":"transparent",borderLeft:now?"2px solid #4ade80":"2px solid transparent",borderRadius:now?6:0}}>
               <div style={{flex:1}}>
-                <span style={{...mono,fontSize:10,color:"#94a3b8"}}>{s.window} <span style={{color:"#475569"}}>/ {egyptWindow(s.window)}</span></span>
-                <p style={{fontSize:10,color:"#475569",margin:"1px 0 0",lineHeight:1.3}}>{s.label}</p>
+                <span style={{...mono,fontSize:10,color:now?"#4ade80":"#94a3b8"}}>{now?"● ":""}{s.window} <span style={{color:"#475569"}}>/ {egyptWindow(s.window)}</span></span>
+                <p style={{fontSize:10,color:"#475569",margin:"1px 0 0",lineHeight:1.3}}>{now?"NOW · ":""}{s.label}</p>
               </div>
               <span style={{...mono,fontSize:9,color:qCol(s.quality),alignSelf:"center",textTransform:"uppercase"}}>{s.quality}</span>
             </div>
-          ))}
+          );})}
         </div>
         <div style={card}>
           <p style={lbl}>Upcoming Binary Events</p>

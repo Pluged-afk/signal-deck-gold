@@ -68,7 +68,7 @@ const GOLD = {
   weekendNote:{ title:"Gold — Pepperstone weekend", lines:[
     "Spread widens to $1–3 (vs $0.20–0.30 weekday)","Volume extremely low",
   ], rec:"Do not trade gold weekends. If forced: TP minimum $30, cut size 50%." },
-  events:["FOMC","NFP","CPI","PCE"], eventsNote:"Gold reacts hardest to US rates & inflation prints.",
+  events:["FOMC","NFP","CPI","PCE","GDP"], eventsNote:"Gold reacts hardest to US rates & inflation prints.",
   riskRules:[
     "Max 1-2% of account at risk per trade","ATR-based stop is pre-calculated — do not widen it",
     "Price already 25%+ toward T1 → skip, wait for pullback","T1 hit → close 50%, move stop to entry immediately",
@@ -605,7 +605,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
       if(!r.ok) throw new Error(`Binance klines ${r.status}`);
       const d=await r.json();
-      return { opens:d.map(k=>parseFloat(k[1])), closes:d.map(k=>parseFloat(k[4])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), volumes:d.map(k=>parseFloat(k[5])) };
+      return { times:d.map(k=>k[0]), opens:d.map(k=>parseFloat(k[1])), closes:d.map(k=>parseFloat(k[4])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), volumes:d.map(k=>parseFloat(k[5])) };
     };
 
     const jget = u => fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);

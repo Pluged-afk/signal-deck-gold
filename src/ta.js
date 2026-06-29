@@ -90,9 +90,16 @@ export const calcADX = (highs, lows, closes, period = 14) => {
 };
 export const adxClass = a => a == null ? "—" : a >= 25 ? "STRONG" : a >= 20 ? "DEVELOPING" : "WEAK";
 
-// ─── Fibonacci retracement from the recent swing ─────────────────────────────
-export const calcFib = (highs, lows, price) => {
-  const high = Math.max(...highs), low = Math.min(...lows);
+// ─── Fibonacci retracement from the recent swing (with swing dates) ──────────
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtSwingDate = t => {
+  if (t == null) return null;
+  const d = typeof t === "number" ? new Date(t) : new Date(String(t).replace(" ", "T") + "Z");
+  return isNaN(d) ? null : `${MON[d.getUTCMonth()]} ${d.getUTCDate()}`;
+};
+export const calcFib = (highs, lows, price, times) => {
+  let high = -Infinity, low = Infinity, hiI = 0, loI = 0;
+  for (let i = 0; i < highs.length; i++) { if (highs[i] > high) { high = highs[i]; hiI = i; } if (lows[i] < low) { low = lows[i]; loI = i; } }
   const range = (high - low) || 1e-9;
   const pcts = [0.236, 0.382, 0.5, 0.618, 0.786];
   const levels = {};
@@ -103,7 +110,18 @@ export const calcFib = (highs, lows, price) => {
   for (let i = 0; i < byPrice.length - 1; i++)
     if (price <= byPrice[i][1] && price >= byPrice[i + 1][1]) { position = `between ${byPrice[i + 1][0]} and ${byPrice[i][0]}`; break; }
   for (const [name, val] of byPrice) if (Math.abs(price - val) / price < 0.003) { atLevel = name; break; }
-  return { high, low, range, levels, position, atLevel };
+  return { high, low, range, levels, position, atLevel, highDate: times ? fmtSwingDate(times[hiI]) : null, lowDate: times ? fmtSwingDate(times[loI]) : null };
+};
+
+// ─── volume divergence: price and volume moving opposite = weak move ─────────
+export const volDivergence = (closes, volumes) => {
+  if (closes.length < 8 || volumes.length < 8 || volumes.every(v => !v)) return null;
+  const pNow = closes[closes.length - 1], pPrev = closes[closes.length - 6];
+  const vRecent = volumes.slice(-3).reduce((a, b) => a + b, 0) / 3, vPrior = volumes.slice(-6, -3).reduce((a, b) => a + b, 0) / 3;
+  const priceUp = pNow > pPrev, volUp = vRecent > vPrior;
+  if (priceUp && !volUp) return "Price rising on falling volume — weak move";
+  if (!priceUp && !volUp) return "Price falling on falling volume — weak selling";
+  return null;
 };
 
 // ─── swing-based support / resistance with touch ranking ────────────────────
@@ -168,14 +186,15 @@ export const trendOf = closes => {
 
 // ─── master aggregator ───────────────────────────────────────────────────────
 // Each c* = { opens, highs, lows, closes, volumes }
-export const analyzeTimeframes = ({ c15, c1h, c4h, price, atr4h }) => {
+export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h }) => {
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = trendOf(c15.closes);
   const adxR = calcADX(c4h.highs, c4h.lows, c4h.closes, 14);
   const adx = adxR ? adxR.adx : null;
-  const fib = calcFib(c4h.highs.slice(-50), c4h.lows.slice(-50), price);
+  const fib = calcFib(c4h.highs.slice(-50), c4h.lows.slice(-50), price, c4hTimes ? c4hTimes.slice(-50) : null);
   const sr = detectLevels(c4h.highs.slice(-100), c4h.lows.slice(-100), price);
   const pull = analyzePullback(c1h.highs, c1h.lows, c1h.closes);
   const vol4 = volumeState(c4h.volumes), vol1 = volumeState(c1h.volumes), vol15 = volumeState(c15.volumes);
+  const volDiv = volDivergence(c4h.closes, c4h.volumes);
 
   const nearRes = sr.resistance[0] && Math.abs(price - sr.resistance[0].level) / price < 0.005;
   const nearSup = sr.support[0] && Math.abs(price - sr.support[0].level) / price < 0.005;
@@ -217,7 +236,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, price, atr4h }) => {
 
   return {
     t4, t1, t15, adx, adxClass: adxClass(adx),
-    fib, sr, pull, vol4, vol1, vol15,
+    fib, sr, pull, vol4, vol1, vol15, volDiv,
     pat4, pat1, pat15, patternBias, keyPattern, nearRes, nearSup,
     mtf, entries, atr4h,
   };
@@ -284,7 +303,7 @@ CANDLE PATTERNS (last 3 candles)
   ${pats("1h", ta.pat1)}
   pattern bias: ${ta.patternBias}${ta.keyPattern ? ` | KEY: ${ta.keyPattern.name} on ${ta.keyPattern.tf} at ${ta.nearRes ? "resistance" : ta.nearSup ? "support" : "level"}` : ""}
 
-VOLUME (current vs 20-avg)  4h:${ta.vol4 ? ta.vol4.cls + " " + ta.vol4.ratio.toFixed(2) + "x" : "n/a"} | 1h:${ta.vol1 ? ta.vol1.cls + " " + ta.vol1.ratio.toFixed(2) + "x" : "n/a"}
+VOLUME (current vs 20-avg)  4h:${ta.vol4 ? ta.vol4.cls + " " + ta.vol4.ratio.toFixed(2) + "x" : "n/a"} | 1h:${ta.vol1 ? ta.vol1.cls + " " + ta.vol1.ratio.toFixed(2) + "x" : "n/a"}${ta.volDiv ? `\n  ⚠ ${ta.volDiv}` : ""}
 
 FIBONACCI (from 4h swing, last 50)  High:${f(ta.fib.high)} Low:${f(ta.fib.low)}
   23.6%:${f(fl[0.236])} | 38.2%:${f(fl[0.382])}★ | 50%:${f(fl[0.5])} | 61.8%:${f(fl[0.618])}★ | 78.6%:${f(fl[0.786])}

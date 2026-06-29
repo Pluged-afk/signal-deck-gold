@@ -196,6 +196,14 @@ export const egyptWindow = win => { const m = (win || "").match(/(\d{1,2}):(\d{2
 // Binary-event urgency: red <3d, orange <7d, amber beyond.
 export const urgencyCol = d => d == null ? "#475569" : d < 3 ? "#f87171" : d < 7 ? "#fb923c" : "#fbbf24";
 
+// Is the current UTC time inside a "HH:MM–HH:MM UTC" window? (handles midnight wrap)
+export const inWindow = win => {
+  const m = (win || "").match(/(\d{1,2}):(\d{2}).*?(\d{1,2}):(\d{2})/); if (!m) return false;
+  const now = new Date(), cur = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const s = +m[1] * 60 + +m[2], e = +m[3] * 60 + +m[4];
+  return s <= e ? (cur >= s && cur < e) : (cur >= s || cur < e);
+};
+
 // ─── Twelve Data fetch with one 429 retry (rate-limit aware) ──────────────────
 // Returns parsed JSON. On a rate-limit response, waits 15s and retries once.
 export const tdFetch = async (url, addLog) => {

@@ -67,16 +67,17 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2 }) {
           <span style={{ fontSize: 11, color: "#64748b" }}>OVERALL {ta.mtf.aligned ? "· aligned" : "· not aligned"} · ADX {ta.adx != null ? ta.adx.toFixed(0) : "—"} ({ta.adxClass})</span>
           <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: sigCol(ta.mtf.overall) }}>{ta.mtf.overall} {ta.mtf.overall !== "WAIT" ? "✅" : "⚠"}</span>
         </div>
+        {ta.volDiv && <p style={{ fontSize: 10, color: "#fb923c", margin: "8px 0 0" }}>⚠ Volume divergence — {ta.volDiv}</p>}
       </div>
 
       {/* Fibonacci + Pullback */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
         <div style={card}>
           <p style={lbl}>Fibonacci (4h swing)</p>
-          {[["Swing High", ta.fib.high, "#94a3b8"], ["23.6%", fl[0.236], "#64748b"], ["38.2% ★", fl[0.382], "#fbbf24"],
-          ["50.0%", fl[0.5], "#64748b"], ["61.8% ★", fl[0.618], "#fbbf24"], ["78.6%", fl[0.786], "#64748b"], ["Swing Low", ta.fib.low, "#94a3b8"]].map(([n, v, c]) => (
-            <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #1e293b" }}>
-              <span style={{ fontSize: 11, color: c }}>{n}</span>
+          {[["Swing High", ta.fib.high, "#94a3b8", ta.fib.highDate], ["23.6%", fl[0.236], "#64748b"], ["38.2% ★", fl[0.382], "#fbbf24"],
+          ["50.0%", fl[0.5], "#64748b"], ["61.8% ★", fl[0.618], "#fbbf24"], ["78.6%", fl[0.786], "#64748b"], ["Swing Low", ta.fib.low, "#94a3b8", ta.fib.lowDate]].map(([n, v, c, date]) => (
+            <div key={n} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "3px 0", borderBottom: "1px solid #1e293b" }}>
+              <span style={{ fontSize: 11, color: c }}>{n}{date ? <span style={{ fontSize: 9, color: "#475569" }}> · {date}</span> : null}</span>
               <span style={{ ...mono, fontSize: 12, color: "#e2e8f0" }}>{fp(v)}</span>
             </div>
           ))}
