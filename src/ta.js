@@ -238,6 +238,37 @@ export const signalQuality = (parsed, ta) => {
   return { score, label };
 };
 
+// ─── Local WAIT when 4h/1h conflict — synthesised without an AI call (saves $) ─
+export const localWait = (ta, price, decimals) => {
+  const f = v => (v == null) ? "n/a" : v.toFixed(decimals);
+  const now = new Date();
+  const nh = (Math.floor(now.getUTCHours() / 4) + 1) * 4;
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+  d.setUTCHours(nh);
+  const c4 = `${String(d.getUTCHours() % 24).padStart(2, "0")}:00 UTC`;
+  const res = ta.sr?.resistance?.[0]?.level, sup = ta.sr?.support?.[0]?.level;
+  return {
+    action: "WAIT", price: String(price), confidence: "LOW", wait_type: "low_confidence",
+    reasoning: `4h trend is ${ta.t4} but 1h is ${ta.t1} — the master timeframes conflict, so the local MTF rule forces WAIT (full AI analysis skipped to save cost).`,
+    scorecard: {}, exits: [], sources: [], news_hl: "Local WAIT — 4h/1h conflict (no AI call)", news_sent: "NEUTRAL", binary_event: "none",
+    data_note: "4h/1h conflict — analysis skipped to save API cost",
+    triggers: {
+      watch_long: sup ? f(sup) : "n/a", watch_long_note: "nearest 4h support — a LONG needs price here with 1h flipping to match 4h",
+      watch_short: res ? f(res) : "n/a", watch_short_note: "nearest 4h resistance — a SHORT needs rejection here with 1h flipping bearish",
+      invalidation: "n/a", invalidation_note: "",
+      next_session: "", next_session_note: "",
+      news_time: "none", news_event: "none",
+      candle_close: c4, candle_close_note: "4h close may resolve the 4h/1h conflict",
+      mtf_fix: `4h (${ta.t4}) and 1h (${ta.t1}) must align in the same direction`,
+      pattern_needed: "a clean trend candle on 1h in the 4h direction",
+      indicator_needed: `1h trend to flip to ${ta.t4}`,
+      primary_reason: "4h and 1h timeframes conflict", secondary_reason: "none",
+      estimated_clarity: `after the ${c4} 4h candle close`,
+      refresh_recommendation: `Refresh at ${c4} (next 4h close), or sooner if the 1h trend flips to ${ta.t4}`,
+    },
+  };
+};
+
 // ─── prompt block: hand the AI everything we computed (it must not re-derive) ─
 export const taPromptBlock = (ta, f) => {
   const fl = ta.fib.levels;

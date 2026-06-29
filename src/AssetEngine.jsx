@@ -8,6 +8,7 @@ import {
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
 import { runPreCheck, storeSignalForPrecheck, PrecheckCard, precheckSummary } from "./precheck";
+import { localWait } from "./ta";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
@@ -35,6 +36,21 @@ export default function AssetEngine({ config, onBack }) {
     setPrecheck(null); setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
     try{
       const { pkg, price, session, meta } = await config.pipeline({ keys, addLog });
+
+      // HARD GATE: if 4h and 1h trends conflict, force WAIT locally — skip the
+      // paid AI call entirely (the MTF master rule, enforced in code not prompt).
+      const ta = meta.ta;
+      if(ta && ta.t4!=="FLAT" && ta.t1!=="FLAT" && ta.t4!==ta.t1){
+        addLog(`MTF conflict (4h ${ta.t4} vs 1h ${ta.t1}) — forcing WAIT, skipping AI call`);
+        const parsed = localWait(ta, price, config.pricePrefix===""?5:2);
+        config.merge(parsed, meta);
+        parsed.session = session.label; parsed.session_quality = session.quality;
+        addLog("Signal complete (local WAIT).");
+        setSig(parsed); setTs(new Date());
+        try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
+        return;
+      }
+
       addLog("Sending to AI for news + synthesis...");
       const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog });
       const parsed = parseJSON(finalText);
@@ -43,6 +59,15 @@ export default function AssetEngine({ config, onBack }) {
       parsed.session = session.label;
       parsed.session_quality = session.quality;
       if(!parsed.price && price) parsed.price = String(price);
+
+      // HARD GATE: computed signal quality <50 forces WAIT (enforced in code).
+      if(parsed._quality && parsed._quality.score < 50 && parsed.action !== "WAIT"){
+        addLog(`Signal quality ${parsed._quality.score}<50 — forcing WAIT`);
+        parsed.action = "WAIT";
+        if(!parsed.wait_type || parsed.wait_type === "none") parsed.wait_type = "low_confidence";
+        if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below 50)`;
+      }
+
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
       try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}

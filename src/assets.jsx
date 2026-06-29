@@ -7,7 +7,7 @@ import {
   mono, card, lbl, fmt, p2, p5,
   calcMACD, calcRSI, calcATR, calcSMA, calcVWAP, calcVolRatio, calcEMAlast, calcPivots,
   getFxSession, getCryptoSession,
-  f1, f2, f3, na, rsiLbl, volLbl,
+  f1, f2, f3, na, rsiLbl, volLbl, tdFetch,
 } from "./shared";
 import { analyzeTimeframes, signalQuality, taPromptBlock } from "./ta";
 
@@ -154,17 +154,16 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
   pipeline: async ({ keys, addLog }) => {
     const tdCandles = async (interval, outputsize=100) => {
-      const r=await fetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`);
-      const d=await r.json();
-      if(d.status==="error") throw new Error(`Twelve Data: ${d.message}`);
-      const v=(d.values||[]).reverse();
-      return { opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
+      const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
+      if(d?.status==="error") throw new Error(`Twelve Data: ${d.message}`);
+      const v=(d?.values||[]).reverse();
+      return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
     const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`); const d=await r.json(); return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null; };
 
     addLog("Fetching spot price...");
     let spot=null;
-    if(keys.td) try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price&&parseFloat(d.price)>100) spot={price:p2(d.price),src:"Twelve Data"}; }catch(_){}
+    if(keys.td) try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>100) spot={price:p2(d.price),src:"Twelve Data"}; }catch(_){}
     if(!spot) try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"); if(r.ok){const d=await r.json(),g=d?.["pax-gold"];if(g?.usd>100) spot={price:p2(g.usd),src:"CoinGecko PAXG"};} }catch(_){}
     if(!spot) try{ const r=await fetch("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"); if(r.ok){const d=await r.json(),q=d?.[0]?.spreadProfilePrices?.find(x=>x.spreadProfile==="prime");if(q?.ask&&q?.bid) spot={price:p2((q.ask+q.bid)/2),src:"Swissquote"};} }catch(_){}
     if(!spot) throw new Error("Could not fetch gold spot price from any source.");
@@ -172,19 +171,12 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
     let td=null, ta=null;
     if(keys.td){ try{
-      addLog("Fetching 15m candles (entry/pullback)...");
-      const c15=await tdCandles("15min",100);
-      addLog("Fetching 1h candles...");
-      const c1h=await tdCandles("1h",100);
+      addLog("Fetching 15m/1h/4h/daily candles in parallel...");
+      const [c15,c1h,c4h,c1d]=await Promise.all([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",100),tdCandles("1day",210)]);
       const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
       const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
       const vol1h=calcVolRatio(c1h.volumes);
-      addLog(`1h → MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} VWAP:$${vwap?.toFixed(2)}`);
-      addLog("Fetching 4h candles...");
-      const c4h=await tdCandles("4h",100);
       const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes), vol4h=calcVolRatio(c4h.volumes);
-      addLog("Fetching daily candles (200MA)...");
-      const c1d=await tdCandles("1day",210);
       const ma200=calcSMA(c1d.closes,200), macdD=calcMACD(c1d.closes), rsiD=calcRSI(c1d.closes), volD=calcVolRatio(c1d.volumes);
       const dailyAtr=calcATR(c1d.highs,c1d.lows,c1d.closes);
       const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
@@ -192,16 +184,16 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       // round numbers within $30 (gold respects these strongly)
       const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
       td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, bullMacd:bull, bearMacd:3-bull };
-      ta=analyzeTimeframes({ c15, c1h, c4h, price:spot.price, atr4h });
-      addLog(`MTF → 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+      addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
     let macro={nominal:null,tips:null,realYield:null,dxy:null};
     if(keys.fred){ try{
-      addLog("Fetching FRED yields + DXY...");
-      macro.nominal=await fred("DGS10"); macro.tips=await fred("T10YIE");
-      if(macro.nominal&&macro.tips) macro.realYield=p2(macro.nominal-macro.tips);
-      macro.dxy=await fred("DTWEXBGS");
+      addLog("Fetching FRED yields + DXY in parallel...");
+      const [nominal,tips,dxy]=await Promise.all([fred("DGS10"),fred("T10YIE"),fred("DTWEXBGS")]);
+      macro.nominal=nominal; macro.tips=tips; macro.dxy=dxy;
+      if(nominal&&tips) macro.realYield=p2(nominal-tips);
       addLog(`FRED → real:${macro.realYield}% DXY:${macro.dxy}`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
@@ -390,17 +382,16 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
   pipeline: async ({ keys, addLog }) => {
     const tdCandles = async (interval, outputsize=100) => {
-      const r=await fetch(`https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`);
-      const d=await r.json();
-      if(d.status==="error") throw new Error(`Twelve Data: ${d.message}`);
-      const v=(d.values||[]).reverse();
+      const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
+      if(d?.status==="error") throw new Error(`Twelve Data: ${d.message}`);
+      const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
     const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`); const d=await r.json(); return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null; };
 
     addLog("Fetching EUR/USD spot...");
     let spot=null;
-    if(keys.td) try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price&&parseFloat(d.price)>0.5) spot={price:p5(d.price),src:"Twelve Data"}; }catch(_){}
+    if(keys.td) try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>0.5) spot={price:p5(d.price),src:"Twelve Data"}; }catch(_){}
     if(!spot) try{ const r=await fetch("https://api.frankfurter.app/latest?from=EUR&to=USD"); if(r.ok){const d=await r.json();const px=d?.rates?.USD;if(px>0.5) spot={price:p5(px),src:"Frankfurter"};} }catch(_){}
     if(!spot) try{ const r=await fetch("https://api.exchangerate.host/latest?base=EUR&symbols=USD"); if(r.ok){const d=await r.json();const px=d?.rates?.USD;if(px>0.5) spot={price:p5(px),src:"exchangerate.host"};} }catch(_){}
     if(!spot) throw new Error("Could not fetch EUR/USD price from any source.");
@@ -408,20 +399,13 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
     let td=null, ta=null;
     if(keys.td){ try{
-      addLog("Fetching 15m candles (entry/pullback)...");
-      const c15=await tdCandles("15min",100);
-      addLog("Fetching 1h candles...");
-      const c1h=await tdCandles("1h",100);
+      addLog("Fetching 15m/1h/4h/daily candles in parallel...");
+      const [c15,c1h,c4h,c1d]=await Promise.all([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",250),tdCandles("1day",30)]);
       const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes);
       const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
       const ema50_1h=calcEMAlast(c1h.closes,50);
-      addLog(`1h → MACD:${macd1h.macd?.toFixed(5)} RSI:${rsi1h.toFixed(1)}`);
-      addLog("Fetching 4h candles (EMA50/200 + ATR)...");
-      const c4h=await tdCandles("4h",250);
       const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes);
       const ema50=calcEMAlast(c4h.closes,50), ema200=calcEMAlast(c4h.closes,200);
-      addLog("Fetching daily candle (pivots)...");
-      const c1d=await tdCandles("1day",30);
       const n=c1d.closes.length; const pv=n>=2?calcPivots(c1d.highs[n-2],c1d.lows[n-2],c1d.closes[n-2]):null;
       const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
       // daily range exhaustion: today's pips vs 20-day avg range
@@ -433,15 +417,16 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       if(c1h.times){ const rows=c1h.times.map((t,i)=>({hr:+(t.slice(11,13)),day:t.slice(0,10),h:c1h.highs[i],l:c1h.lows[i]})).filter(r=>r.hr>=0&&r.hr<8);
         if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
       td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow };
-      ta=analyzeTimeframes({ c15, c1h, c4h, price:spot.price, atr4h });
-      addLog(`MTF → 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+      addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
     let macro={dxy:null,fedfunds:null,dgs10:null};
     if(keys.fred){ try{
-      addLog("Fetching FRED DXY + Fed funds + 10Y...");
-      macro.dxy=await fred("DTWEXBGS"); macro.fedfunds=await fred("FEDFUNDS"); macro.dgs10=await fred("DGS10");
-      addLog(`FRED → DXY:${macro.dxy} FedFunds:${macro.fedfunds}% 10Y:${macro.dgs10}%`);
+      addLog("Fetching FRED DXY + Fed funds + 10Y in parallel...");
+      const [dxy,fedfunds,dgs10]=await Promise.all([fred("DTWEXBGS"),fred("FEDFUNDS"),fred("DGS10")]);
+      macro.dxy=dxy; macro.fedfunds=fedfunds; macro.dgs10=dgs10;
+      addLog(`FRED → DXY:${dxy} FedFunds:${fedfunds}% 10Y:${dgs10}%`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
     const session=getFxSession();
@@ -621,52 +606,45 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       return { opens:d.map(k=>parseFloat(k[1])), closes:d.map(k=>parseFloat(k[4])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), volumes:d.map(k=>parseFloat(k[5])) };
     };
 
-    addLog("Fetching BTC 24h ticker (Binance)...");
+    const jget = u => fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);
+    addLog("Fetching BTC market data in parallel (Binance + CoinGecko)...");
+    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, domR, fngR] = await Promise.all([
+      jget("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"),
+      klines("15m",100).catch(()=>null), klines("1h",100).catch(()=>null), klines("4h",100).catch(()=>null),
+      klines("1d",220).catch(()=>null), klines("1w",2).catch(()=>null),
+      jget("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1"),
+      jget("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"),
+      jget("https://api.coingecko.com/api/v3/global"),
+      jget("https://api.alternative.me/fng/?limit=1"),
+    ]);
+
     let spot=null, h24=null, l24=null, chg=null;
-    try{
-      const r=await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
-      if(r.ok){ const d=await r.json(); if(parseFloat(d.lastPrice)>1000){ spot={price:p2(d.lastPrice),src:"Binance"}; h24=p2(d.highPrice); l24=p2(d.lowPrice); chg=parseFloat(d.priceChangePercent); } }
-    }catch(_){}
-    if(!spot) try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"); if(r.ok){const d=await r.json();if(d?.bitcoin?.usd>1000) spot={price:p2(d.bitcoin.usd),src:"CoinGecko"};} }catch(_){}
+    if(tickerR&&parseFloat(tickerR.lastPrice)>1000){ spot={price:p2(tickerR.lastPrice),src:"Binance"}; h24=p2(tickerR.highPrice); l24=p2(tickerR.lowPrice); chg=parseFloat(tickerR.priceChangePercent); }
+    if(!spot){ const d=await jget("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"); if(d?.bitcoin?.usd>1000) spot={price:p2(d.bitcoin.usd),src:"CoinGecko"}; }
     if(!spot) throw new Error("Could not fetch BTC price from Binance or CoinGecko.");
-    addLog(`Spot: $${spot.price} (${spot.src}) ${chg!=null?`24h ${chg>0?"+":""}${chg}%`:""}`);
+    addLog(`Spot: $${spot.price} (${spot.src})${chg!=null?` 24h ${chg>0?"+":""}${chg}%`:""}`);
 
     let td=null, ta=null;
-    try{
-      addLog("Fetching 15m klines (entry/pullback)...");
-      const c15=await klines("15m",100);
-      addLog("Fetching 1h klines...");
-      const c1h=await klines("1h",100);
+    if(c1h&&c4h&&c1d&&c15){ try{
       const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), vol1h=calcVolRatio(c1h.volumes);
-      addLog(`1h → MACD:${macd1h.macd?.toFixed(1)} RSI:${rsi1h.toFixed(1)}`);
-      addLog("Fetching 4h klines (ATR)...");
-      const c4h=await klines("4h",100);
       const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes), vol4h=calcVolRatio(c4h.volumes);
-      addLog("Fetching daily klines (200 SMA)...");
-      const c1d=await klines("1d",220);
       const sma200=calcSMA(c1d.closes,200);
-      // weekly candle direction (first weekly kline is the current week)
-      let weeklyDir="n/a"; try{ const w=await klines("1w",2); const i=w.closes.length-1; weeklyDir=w.closes[i]>=w.opens[i]?"BULLISH":"BEARISH"; }catch(_){}
+      let weeklyDir="n/a"; if(c1w){ const i=c1w.closes.length-1; weeklyDir=c1w.closes[i]>=c1w.opens[i]?"BULLISH":"BEARISH"; }
       // whale wick on the latest 4h candle: wick > 3× body
       const li=c4h.closes.length-1; const body=Math.abs(c4h.closes[li]-c4h.opens[li])||1e-9;
       const upW=c4h.highs[li]-Math.max(c4h.opens[li],c4h.closes[li]), loW=Math.min(c4h.opens[li],c4h.closes[li])-c4h.lows[li];
       const whaleWick=(upW>3*body||loW>3*body)?(upW>loW?"upper (rejection — bearish)":"lower (absorption — bullish)"):null;
       td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick };
-      ta=analyzeTimeframes({ c15, c1h, c4h, price:spot.price, atr4h });
-      addLog(`MTF → 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
-    }catch(e){ addLog(`Binance candles error: ${e.message}`); }
+      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+      addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
+    }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
 
-    addLog("Fetching funding + open interest...");
-    let funding=null, oi=null;
-    try{ const r=await fetch("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1"); if(r.ok){const d=await r.json();funding=d?.[0]?.fundingRate!=null?parseFloat(d[0].fundingRate)*100:null;} }catch(_){}
-    try{ const r=await fetch("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"); if(r.ok){const d=await r.json();oi=d?.openInterest?parseFloat(d.openInterest):null;} }catch(_){}
-    addLog(`Funding: ${funding!=null?funding.toFixed(4)+"%":"n/a"} | OI: ${oi!=null?Math.round(oi).toLocaleString()+" BTC":"n/a"}`);
-
-    addLog("Fetching dominance + Fear & Greed...");
-    let dom=null, fng=null, fngLabel=null;
-    try{ const r=await fetch("https://api.coingecko.com/api/v3/global"); if(r.ok){const d=await r.json();dom=d?.data?.market_cap_percentage?.btc??null;} }catch(_){}
-    try{ const r=await fetch("https://api.alternative.me/fng/?limit=1"); if(r.ok){const d=await r.json();fng=d?.data?.[0]?.value?parseInt(d.data[0].value):null;fngLabel=d?.data?.[0]?.value_classification??null;} }catch(_){}
-    addLog(`Dominance: ${dom!=null?dom.toFixed(1)+"%":"n/a"} | F&G: ${fng!=null?fng+" "+fngLabel:"n/a"}`);
+    let funding=null, oi=null, dom=null, fng=null, fngLabel=null;
+    if(fundingR?.[0]?.fundingRate!=null) funding=parseFloat(fundingR[0].fundingRate)*100;
+    if(oiR?.openInterest) oi=parseFloat(oiR.openInterest);
+    if(domR?.data?.market_cap_percentage?.btc!=null) dom=domR.data.market_cap_percentage.btc;
+    if(fngR?.data?.[0]?.value){ fng=parseInt(fngR.data[0].value); fngLabel=fngR.data[0].value_classification; }
+    addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"} Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
 
     const session=getCryptoSession();
     const atr=td?.atr4h??null;

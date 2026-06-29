@@ -186,6 +186,22 @@ export const upcomingEvents = (types, n=3) => {
   });
 };
 
+// ─── Twelve Data fetch with one 429 retry (rate-limit aware) ──────────────────
+// Returns parsed JSON. On a rate-limit response, waits 15s and retries once.
+export const tdFetch = async (url, addLog) => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(url);
+    let d = null; try { d = await r.json(); } catch (_) {}
+    const limited = r.status === 429 || d?.code === 429 || (d?.status === "error" && /limit|credit|run out/i.test(d?.message || ""));
+    if (limited && attempt === 0) {
+      addLog && addLog("Rate limited — retrying in 15s");
+      await new Promise(s => setTimeout(s, 15000));
+      continue;
+    }
+    return d;
+  }
+};
+
 // ─── Anthropic multi-turn loop (centralised, with the conversation-history fix)
 // Order is strict: capture text → if end_turn break → if pause_turn echo+continue
 // → else push assistant, then handle tool_use. Never push-then-break.
