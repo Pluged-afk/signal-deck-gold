@@ -3,7 +3,7 @@ import {
   mono, card, lbl, fmt, inputStyle,
   aStyl, rStyl, cCol, sCol, qCol,
   parseJSON, runAI, isWeekend, upcomingEvents,
-  loadKeys, saveKeys, WAIT_RULES,
+  loadKeys, saveKeys, WAIT_RULES, egyptWindow, urgencyCol,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -204,6 +204,7 @@ export default function AssetEngine({ config, onBack }) {
                 {sig.passes!==undefined&&(()=>{const need=Math.ceil(config.passesOf*0.6);return <span style={{...mono,fontSize:11,color:sig.passes>=need?"#4ade80":sig.passes>=need-1?"#fbbf24":"#f87171"}}>{sig.passes}/{config.passesOf} confirmed</span>;})()}
                 {sig.signal_quality&&<span style={{...mono,fontSize:11,color:T.accentText,padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>Q {sig.signal_quality}</span>}
                 {sig.action==="WAIT"&&sig.wait_type&&sig.wait_type!=="none"&&<span style={{...mono,fontSize:11,fontWeight:600,color:waitTypeMeta(sig.wait_type).col}}>{waitTypeMeta(sig.wait_type).label}</span>}
+                {(sig._sources||[]).map(s=><span key={s} style={{...mono,fontSize:10,color:"#4ade80"}}>✓ {s}</span>)}
               </div>
             </div>
             <div style={{textAlign:"right"}}>
@@ -211,11 +212,11 @@ export default function AssetEngine({ config, onBack }) {
               <p style={{...mono,fontSize:16,margin:0,color:cCol(sig.confidence)}}>{sig.confidence}</p>
             </div>
           </div>
-          {sig.binary_event&&sig.binary_event!=="none"&&sig.binary_event!==""&&(
-            <div style={{marginTop:8,padding:"6px 10px",background:T.panelBg,borderRadius:8,border:`1px solid ${T.panelBorder}`}}>
-              <span style={{fontSize:11,color:T.accentText,...mono}}>⚠ Binary event: {sig.binary_event}</span>
+          {sig.binary_event&&sig.binary_event!=="none"&&sig.binary_event!==""&&(()=>{const uc=urgencyCol(events[0]?.days);return(
+            <div style={{marginTop:8,padding:"6px 10px",background:T.panelBg,borderRadius:8,border:`1px solid ${uc}`}}>
+              <span style={{fontSize:11,color:uc,...mono}}>⚠ Binary event: {sig.binary_event}</span>
             </div>
-          )}
+          );})()}
         </div>
 
         {/* WAIT → watch-for card replaces the entry plan; LONG/SHORT → invalidation card */}
@@ -327,7 +328,7 @@ export default function AssetEngine({ config, onBack }) {
           {config.sessionsGuide.map((s,i)=>(
             <div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:"1px solid #1e293b"}}>
               <div style={{flex:1}}>
-                <span style={{...mono,fontSize:10,color:"#94a3b8"}}>{s.window}</span>
+                <span style={{...mono,fontSize:10,color:"#94a3b8"}}>{s.window} <span style={{color:"#475569"}}>/ {egyptWindow(s.window)}</span></span>
                 <p style={{fontSize:10,color:"#475569",margin:"1px 0 0",lineHeight:1.3}}>{s.label}</p>
               </div>
               <span style={{...mono,fontSize:9,color:qCol(s.quality),alignSelf:"center",textTransform:"uppercase"}}>{s.quality}</span>
@@ -341,9 +342,9 @@ export default function AssetEngine({ config, onBack }) {
             <div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:"1px solid #1e293b"}}>
               <div style={{flex:1}}>
                 <span style={{fontSize:11,color:"#cbd5e1"}}>{e.label}{e.approx?" ~":""}</span>
-                <p style={{...mono,fontSize:10,color:"#475569",margin:"1px 0 0"}}>{e.ds}</p>
+                <p style={{...mono,fontSize:10,color:"#475569",margin:"1px 0 0"}}>{e.ds} · {e.tEgy} EGY</p>
               </div>
-              <span style={{...mono,fontSize:10,color:e.in==="today"||e.in==="1 day"?"#fbbf24":"#475569",alignSelf:"center"}}>{e.in}</span>
+              <span style={{...mono,fontSize:10,fontWeight:600,color:urgencyCol(e.days),alignSelf:"center"}}>{e.in}</span>
             </div>
           ))}
           <p style={{fontSize:9,color:"#334155",margin:"6px 0 0",lineHeight:1.4}}>{config.eventsNote} Dates auto-estimated — verify official calendar.</p>

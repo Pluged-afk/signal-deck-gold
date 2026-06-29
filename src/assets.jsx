@@ -257,6 +257,7 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(macro.dxy!==null)       p.dxy=String(macro.dxy);
     if(cot&&!p.cot_net)        p.cot_net=cot.netMM?.toLocaleString();
     if(cot&&!p.cot_sentiment)  p.cot_sentiment=cot.sentiment;
+    p._sources=[...(ta?["Real OHLCV"]:[]),...((macro.dxy!=null||macro.realYield!=null)?["FRED"]:[]),...(cot?["COT"]:[])];
     mergeTA(p, ta, v=>v.toFixed(2));
   },
 };
@@ -475,6 +476,7 @@ ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unava
     if(td?.ema200)           p.ema200=td.ema200.toFixed(5);
     if(td?.pivots?.P&&!p.pivot) p.pivot=td.pivots.P.toFixed(5);
     if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=String(macro.dxy);
+    p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
     mergeTA(p, ta, v=>v.toFixed(5));
   },
 };
@@ -543,7 +545,7 @@ const BTC = {
         <p style={lbl}>Derivatives — Binance</p>
         <Stat title="Funding rate (per 8h)" value={fmt(s.funding_rate)} sub=">+0.1% = crowded longs (bearish) · <-0.05% = crowded shorts (bullish)"
           color={(()=>{const v=parseFloat(s.funding_rate);return v>0.1?"#f87171":v<-0.05?"#4ade80":"#e2e8f0";})()}/>
-        <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Open interest</p>
+        <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Open interest {s.oi_trend&&<span style={{color:s.oi_trend==="Rising"?"#4ade80":s.oi_trend==="Falling"?"#f87171":"#94a3b8"}}>· {s.oi_trend}</span>}</p>
         <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(s.open_interest)}</p></div>
       </div>
       <div style={card}>
@@ -608,12 +610,13 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
     const jget = u => fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);
     addLog("Fetching BTC market data in parallel (Binance + CoinGecko)...");
-    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, domR, fngR] = await Promise.all([
+    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, oiHistR, domR, fngR] = await Promise.all([
       jget("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"),
       klines("15m",100).catch(()=>null), klines("1h",100).catch(()=>null), klines("4h",100).catch(()=>null),
       klines("1d",220).catch(()=>null), klines("1w",2).catch(()=>null),
       jget("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1"),
       jget("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"),
+      jget("https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=4h&limit=2"),
       jget("https://api.coingecko.com/api/v3/global"),
       jget("https://api.alternative.me/fng/?limit=1"),
     ]);
@@ -639,12 +642,13 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
 
-    let funding=null, oi=null, dom=null, fng=null, fngLabel=null;
+    let funding=null, oi=null, oiTrend="—", dom=null, fng=null, fngLabel=null;
     if(fundingR?.[0]?.fundingRate!=null) funding=parseFloat(fundingR[0].fundingRate)*100;
     if(oiR?.openInterest) oi=parseFloat(oiR.openInterest);
+    if(Array.isArray(oiHistR)&&oiHistR.length>=2){ const a=parseFloat(oiHistR[oiHistR.length-1].sumOpenInterest), b=parseFloat(oiHistR[oiHistR.length-2].sumOpenInterest); if(a&&b) oiTrend=a>b*1.005?"Rising":a<b*0.995?"Falling":"Flat"; }
     if(domR?.data?.market_cap_percentage?.btc!=null) dom=domR.data.market_cap_percentage.btc;
     if(fngR?.data?.[0]?.value){ fng=parseInt(fngR.data[0].value); fngLabel=fngR.data[0].value_classification; }
-    addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"} Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
+    addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"}(${oiTrend}) Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
 
     const session=getCryptoSession();
     const atr=td?.atr4h??null;
@@ -667,7 +671,7 @@ RSI (14)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(
 
 VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h.ratio):"n/a"} | 4h:${td?.vol4h?td.vol4h.ratio.toFixed(2)+"x"+volLbl(td.vol4h.ratio):"n/a"}
 
-DERIVATIVES  Funding (8h): ${funding!=null?funding.toFixed(4)+"%":"n/a"}${fundLbl} | Open Interest: ${oi!=null?Math.round(oi).toLocaleString()+" BTC":"n/a"}
+DERIVATIVES  Funding (8h): ${funding!=null?funding.toFixed(4)+"%":"n/a"}${fundLbl} | Open Interest: ${oi!=null?Math.round(oi).toLocaleString()+" BTC":"n/a"} (trend: ${oiTrend} over last 4h${oiTrend==="Rising"?" — new positions, strong move":oiTrend==="Falling"?" — positions closing, possible liquidations":""})
 
 MARKET STRUCTURE  BTC Dominance: ${dom!=null?dom.toFixed(1)+"%":"n/a"} | Fear & Greed: ${fng!=null?fng+" "+fngLabel:"n/a"}${fngTxt}
 
@@ -681,17 +685,19 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
 === YOUR JOB: search BTC spot ETF daily flows (IBIT/FBTC — MOST IMPORTANT), whale/on-chain, regulatory news, Nasdaq/VIX risk tone, key round-number S/R, binary events → output JSON ===`;
 
     return { pkg, price:spot.price, src:spot.src, session,
-      meta:{ td, h24, l24, funding, oi, dom, fng, fngLabel, ta } };
+      meta:{ td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta } };
   },
   merge:(p,m)=>{
-    const { td, h24, l24, funding, oi, dom, fng, fngLabel, ta } = m;
+    const { td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta } = m;
     if(h24!=null&&!p.high_24h) p.high_24h=String(h24);
     if(l24!=null&&!p.low_24h)  p.low_24h=String(l24);
     if(td?.sma200)             p.sma200=td.sma200.toFixed(2);
     if(funding!=null)          p.funding_rate=`${funding.toFixed(4)}%`;
     if(oi!=null)               p.open_interest=`${Math.round(oi).toLocaleString()} BTC`;
+    if(oiTrend)                p.oi_trend=oiTrend;
     if(dom!=null)              p.btc_dominance=`${dom.toFixed(1)}%`;
     if(fng!=null&&(!p.fear_greed||p.fear_greed==="")) p.fear_greed=`${fng} ${fngLabel||""}`.trim();
+    p._sources=[...(ta?["Binance OHLCV"]:[]),...(dom!=null?["CoinGecko"]:[]),...(funding!=null?["Funding/OI"]:[])];
     mergeTA(p, ta, v=>v.toFixed(2));
   },
 };

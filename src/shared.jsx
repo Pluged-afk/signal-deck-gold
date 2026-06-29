@@ -182,9 +182,19 @@ export const upcomingEvents = (types, n=3) => {
     const d=e.date;
     const ds=`${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()]} ${d.getUTCDate()}`;
     const days=Math.ceil((d-new Date())/86400000);
-    return { ...e, ds, in:days<=0?"today":days===1?"1 day":`${days} days` };
+    return { ...e, ds, days, tEgy:toEgypt12(d.getUTCHours(),d.getUTCMinutes()), in:days<=0?"today":days===1?"1 day":`${days} days` };
   });
 };
+
+// ─── Egypt local time (UTC+3, EET/EEST) in 12-hour AM/PM ─────────────────────
+export const toEgypt12 = (utcH, utcM = 0) => {
+  let h = ((utcH + 3) % 24 + 24) % 24; const ap = h >= 12 ? "PM" : "AM"; let h12 = h % 12; if (h12 === 0) h12 = 12;
+  return `${h12}:${String(utcM).padStart(2, "0")} ${ap}`;
+};
+export const egyptFromHHMM = s => { const m = /(\d{1,2}):(\d{2})/.exec(s || ""); return m ? toEgypt12(+m[1], +m[2]) : null; };
+export const egyptWindow = win => { const m = (win || "").match(/(\d{1,2}):(\d{2}).*?(\d{1,2}):(\d{2})/); return m ? `${toEgypt12(+m[1], +m[2])}–${toEgypt12(+m[3], +m[4])} EGY` : ""; };
+// Binary-event urgency: red <3d, orange <7d, amber beyond.
+export const urgencyCol = d => d == null ? "#475569" : d < 3 ? "#f87171" : d < 7 ? "#fb923c" : "#fbbf24";
 
 // ─── Twelve Data fetch with one 429 retry (rate-limit aware) ──────────────────
 // Returns parsed JSON. On a rate-limit response, waits 15s and retries once.

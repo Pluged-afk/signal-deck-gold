@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { mono, card, lbl, fmt } from "./shared";
+import { mono, card, lbl, fmt, egyptFromHHMM, toEgypt12 } from "./shared";
 
 // ─── WAIT-type theming ───────────────────────────────────────────────────────
 const WAIT_TYPES = {
@@ -28,19 +28,23 @@ function Countdown({ triggers }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "6px 10px", background: "#020617", borderRadius: 8 }}>
       <span style={{ ...mono, fontSize: 11, color: "#64748b" }}>Next recommended refresh</span>
-      <span style={{ ...mono, fontSize: 12, color: "#e2e8f0" }}>{hhmmUTC(target)} · <span style={{ color: "#fbbf24" }}>{left}</span></span>
+      <span style={{ ...mono, fontSize: 12, color: "#e2e8f0" }}>{hhmmUTC(target)} / {toEgypt12(target.getUTCHours(), target.getUTCMinutes())} EGY · <span style={{ color: "#fbbf24" }}>{left}</span></span>
     </div>
   );
 }
 
-const Node = ({ time, name, note, danger }) => (
-  <div style={{ flex: 1, textAlign: "center", minWidth: 70 }}>
-    <div style={{ width: 9, height: 9, borderRadius: "50%", background: danger ? "#f87171" : "#475569", margin: "0 auto 6px" }} />
-    <p style={{ ...mono, fontSize: 10, color: "#e2e8f0", margin: 0 }}>{time}</p>
-    <p style={{ fontSize: 9, color: danger ? "#f87171" : "#64748b", margin: "1px 0 0", lineHeight: 1.3 }}>{name}</p>
-    {note && <p style={{ fontSize: 8, color: "#475569", margin: "1px 0 0" }}>{note}</p>}
-  </div>
-);
+const Node = ({ time, name, note, danger }) => {
+  const egy = egyptFromHHMM(time);
+  return (
+    <div style={{ flex: 1, textAlign: "center", minWidth: 70 }}>
+      <div style={{ width: 9, height: 9, borderRadius: "50%", background: danger ? "#f87171" : "#475569", margin: "0 auto 6px" }} />
+      <p style={{ ...mono, fontSize: 10, color: "#e2e8f0", margin: 0 }}>{time}</p>
+      {egy && <p style={{ ...mono, fontSize: 8, color: "#475569", margin: 0 }}>{egy} EGY</p>}
+      <p style={{ fontSize: 9, color: danger ? "#f87171" : "#64748b", margin: "1px 0 0", lineHeight: 1.3 }}>{name}</p>
+      {note && <p style={{ fontSize: 8, color: "#475569", margin: "1px 0 0" }}>{note}</p>}
+    </div>
+  );
+};
 
 // ═══ WAIT card (only when action === WAIT) ═══════════════════════════════════
 export default function WaitCard({ sig, pricePrefix = "" }) {
