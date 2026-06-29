@@ -187,20 +187,21 @@ export const trendOf = closes => {
 // ─── master aggregator ───────────────────────────────────────────────────────
 // Each c* = { opens, highs, lows, closes, volumes }
 export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h }) => {
-  const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = trendOf(c15.closes);
+  // c1h and c4h are required (master timeframes); c15 is optional (entry timing).
+  const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
   const adxR = calcADX(c4h.highs, c4h.lows, c4h.closes, 14);
   const adx = adxR ? adxR.adx : null;
   const fib = calcFib(c4h.highs.slice(-50), c4h.lows.slice(-50), price, c4hTimes ? c4hTimes.slice(-50) : null);
   const sr = detectLevels(c4h.highs.slice(-100), c4h.lows.slice(-100), price);
   const pull = analyzePullback(c1h.highs, c1h.lows, c1h.closes);
-  const vol4 = volumeState(c4h.volumes), vol1 = volumeState(c1h.volumes), vol15 = volumeState(c15.volumes);
+  const vol4 = volumeState(c4h.volumes), vol1 = volumeState(c1h.volumes), vol15 = c15 ? volumeState(c15.volumes) : null;
   const volDiv = volDivergence(c4h.closes, c4h.volumes);
 
   const nearRes = sr.resistance[0] && Math.abs(price - sr.resistance[0].level) / price < 0.005;
   const nearSup = sr.support[0] && Math.abs(price - sr.support[0].level) / price < 0.005;
   const pat4 = detectPatterns(buildCandles(c4h.opens, c4h.highs, c4h.lows, c4h.closes), { tf: "4h", atResistance: nearRes, atSupport: nearSup });
   const pat1 = detectPatterns(buildCandles(c1h.opens, c1h.highs, c1h.lows, c1h.closes), { tf: "1h", atResistance: nearRes, atSupport: nearSup });
-  const pat15 = detectPatterns(buildCandles(c15.opens, c15.highs, c15.lows, c15.closes), { tf: "15m" });
+  const pat15 = c15 ? detectPatterns(buildCandles(c15.opens, c15.highs, c15.lows, c15.closes), { tf: "15m" }) : [];
 
   const allPats = [...pat4, ...pat1];
   const bullP = allPats.filter(p => p.dir === "bullish").length;

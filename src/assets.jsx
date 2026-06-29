@@ -172,20 +172,25 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     let td=null, ta=null;
     if(keys.td){ try{
       addLog("Fetching 15m/1h/4h/daily candles in parallel...");
-      const [c15,c1h,c4h,c1d]=await Promise.all([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",100),tdCandles("1day",210)]);
-      const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
-      const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
-      const vol1h=calcVolRatio(c1h.volumes);
-      const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes), vol4h=calcVolRatio(c4h.volumes);
-      const ma200=calcSMA(c1d.closes,200), macdD=calcMACD(c1d.closes), rsiD=calcRSI(c1d.closes), volD=calcVolRatio(c1d.volumes);
-      const dailyAtr=calcATR(c1d.highs,c1d.lows,c1d.closes);
-      const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
-      const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
-      // round numbers within $30 (gold respects these strongly)
-      const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
-      td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, bullMacd:bull, bearMacd:3-bull };
-      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
-      addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+      // allSettled so one failed timeframe doesn't drop the others
+      const settled=await Promise.allSettled([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",100),tdCandles("1day",210)]);
+      const [c15,c1h,c4h,c1d]=settled.map(r=>r.status==="fulfilled"?r.value:null);
+      settled.forEach((r,i)=>{ if(r.status==="rejected") addLog(`${["15m","1h","4h","daily"][i]} candles failed: ${r.reason?.message||r.reason}`); });
+      if(c1h&&c4h){
+        const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
+        const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
+        const vol1h=calcVolRatio(c1h.volumes);
+        const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes), vol4h=calcVolRatio(c4h.volumes);
+        const ma200=c1d?calcSMA(c1d.closes,200):null, macdD=c1d?calcMACD(c1d.closes):null, rsiD=c1d?calcRSI(c1d.closes):null, volD=c1d?calcVolRatio(c1d.volumes):null;
+        const dailyAtr=c1d?calcATR(c1d.highs,c1d.lows,c1d.closes):null;
+        const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
+        const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
+        // round numbers within $30 (gold respects these strongly)
+        const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
+        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, bullMacd:bull, bearMacd:3-bull };
+        ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+        addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+      } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
     let macro={nominal:null,tips:null,realYield:null,dxy:null};
@@ -401,25 +406,30 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     let td=null, ta=null;
     if(keys.td){ try{
       addLog("Fetching 15m/1h/4h/daily candles in parallel...");
-      const [c15,c1h,c4h,c1d]=await Promise.all([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",250),tdCandles("1day",30)]);
-      const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes);
-      const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
-      const ema50_1h=calcEMAlast(c1h.closes,50);
-      const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes);
-      const ema50=calcEMAlast(c4h.closes,50), ema200=calcEMAlast(c4h.closes,200);
-      const n=c1d.closes.length; const pv=n>=2?calcPivots(c1d.highs[n-2],c1d.lows[n-2],c1d.closes[n-2]):null;
-      const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
-      // daily range exhaustion: today's pips vs 20-day avg range
-      const todayPips=Math.round((h24-l24)*10000);
-      const avgRange=c1d.highs.slice(-21,-1).map((h,i)=>h-c1d.lows.slice(-21,-1)[i]).reduce((a,b)=>a+b,0)/20;
-      const avgPips=Math.round(avgRange*10000); const rangeUsed=avgPips?Math.round(todayPips/avgPips*100):null;
-      // Asian session range (00:00-08:00 UTC of the most recent day) → break = trigger
-      let asianHigh=null, asianLow=null;
-      if(c1h.times){ const rows=c1h.times.map((t,i)=>({hr:+(t.slice(11,13)),day:t.slice(0,10),h:c1h.highs[i],l:c1h.lows[i]})).filter(r=>r.hr>=0&&r.hr<8);
-        if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
-      td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow };
-      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
-      addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+      // allSettled so one failed timeframe doesn't drop the others
+      const settled=await Promise.allSettled([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",250),tdCandles("1day",30)]);
+      const [c15,c1h,c4h,c1d]=settled.map(r=>r.status==="fulfilled"?r.value:null);
+      settled.forEach((r,i)=>{ if(r.status==="rejected") addLog(`${["15m","1h","4h","daily"][i]} candles failed: ${r.reason?.message||r.reason}`); });
+      if(c1h&&c4h){
+        const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes);
+        const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
+        const ema50_1h=calcEMAlast(c1h.closes,50);
+        const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes);
+        const ema50=calcEMAlast(c4h.closes,50), ema200=calcEMAlast(c4h.closes,200);
+        const pv=c1d&&c1d.closes.length>=2?calcPivots(c1d.highs[c1d.closes.length-2],c1d.lows[c1d.closes.length-2],c1d.closes[c1d.closes.length-2]):null;
+        const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
+        // daily range exhaustion: today's pips vs 20-day avg range
+        const todayPips=Math.round((h24-l24)*10000);
+        let avgPips=null, rangeUsed=null;
+        if(c1d&&c1d.highs.length>=21){ const avgRange=c1d.highs.slice(-21,-1).map((h,i)=>h-c1d.lows.slice(-21,-1)[i]).reduce((a,b)=>a+b,0)/20; avgPips=Math.round(avgRange*10000); rangeUsed=avgPips?Math.round(todayPips/avgPips*100):null; }
+        // Asian session range (00:00-08:00 UTC of the most recent day) → break = trigger
+        let asianHigh=null, asianLow=null;
+        if(c1h.times){ const rows=c1h.times.map((t,i)=>({hr:+(t.slice(11,13)),day:t.slice(0,10),h:c1h.highs[i],l:c1h.lows[i]})).filter(r=>r.hr>=0&&r.hr<8);
+          if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
+        td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow };
+        ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+        addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+      } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
     let macro={dxy:null,fedfunds:null,dgs10:null};

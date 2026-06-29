@@ -26,6 +26,7 @@ function getCookie(header, name) {
 
 const shell = (inner, status) => new Response(
   `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="robots" content="noindex,nofollow,noarchive"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Signal Deck — private</title></head>
 <body style="margin:0;background:#020617;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
