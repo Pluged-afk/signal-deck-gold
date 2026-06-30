@@ -13,7 +13,7 @@ import { localWait } from "./ta";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
-export default function AssetEngine({ config, onBack }) {
+export default function AssetEngine({ config, onBack, headerExtra }) {
   const T = config.theme;
   const [keys,    setKeys]    = useState(loadKeys);
   const [tmpKeys, setTmpKeys] = useState(loadKeys);
@@ -120,6 +120,8 @@ export default function AssetEngine({ config, onBack }) {
           <button onClick={()=>setKeysSet(false)} style={ghostBtn}>⚙ Keys</button>
         </div>
       </div>
+
+      {headerExtra}
 
       {/* Weekend banner */}
       {wknd&&(

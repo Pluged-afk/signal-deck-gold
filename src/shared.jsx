@@ -223,8 +223,8 @@ export const tdFetch = async (url, addLog) => {
 // ─── Anthropic multi-turn loop (centralised, with the conversation-history fix)
 // Order is strict: capture text → if end_turn break → if pause_turn echo+continue
 // → else push assistant, then handle tool_use. Never push-then-break.
-export async function runAI({ apiKey, system, userContent, addLog, model="claude-sonnet-4-6", maxTokens=4096 }) {
-  const tools=[{ type:"web_search_20250305", name:"web_search" }];
+export async function runAI({ apiKey, system, userContent, addLog, model="claude-sonnet-4-6", maxTokens=4096, maxSearches }) {
+  const tools=[{ type:"web_search_20250305", name:"web_search", ...(maxSearches?{ max_uses:maxSearches }:{}) }];
   let history=[{ role:"user", content:userContent }];
   let finalText="";
 
