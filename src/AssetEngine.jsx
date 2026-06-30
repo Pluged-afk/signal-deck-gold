@@ -4,7 +4,7 @@ import {
   aStyl, rStyl, cCol, sCol, qCol,
   parseJSON, runAI, isWeekend, upcomingEvents,
   loadKeys, saveKeys, WAIT_RULES, egyptWindow, urgencyCol, inWindow,
-  bumpSignalCount, signalCount, EST_COST,
+  bumpSignalCount, signalCount, EST_COST, EST_COST_HIGH,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -133,7 +133,7 @@ export default function AssetEngine({ config, onBack }) {
       {/* Session cost (fix 3) */}
       {costN>0&&(
         <p style={{...mono,fontSize:10,color:"#64748b",margin:"0 0 8px",textAlign:"right"}}>
-          Session: {costN} paid signal{costN>1?"s":""} · ~€{(costN*EST_COST).toFixed(2)} (est.)
+          Session: {costN} paid signal{costN>1?"s":""} · €{(costN*EST_COST).toFixed(2)} – €{(costN*EST_COST_HIGH).toFixed(2)} (est.)
         </p>
       )}
 
