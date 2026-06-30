@@ -80,7 +80,7 @@ export default function ScalpEngine({ onBack, toggle }) {
       bumpSignalCount(); bumpDaily(); setLast();
 
       let action = s.dir, waitReason = "";
-      if (s.dir === "WAIT") waitReason = s.tooQuiet ? "Market too quiet — ATR below 3 pips, no scalp opportunity" : s.tooVolatile ? "Too volatile — stop would exceed 20 pips" : `Only ${Math.max(s.longConds.filter(Boolean).length, s.shortConds.filter(Boolean).length)}/6 conditions met`;
+      if (s.dir === "WAIT") waitReason = s.gateReason || (s.tooQuiet ? "Market too quiet — ATR below 3 pips, no scalp opportunity" : s.tooVolatile ? "Too volatile — stop would exceed 20 pips" : `Only ${Math.max(s.longConds.filter(Boolean).length, s.shortConds.filter(Boolean).length)}/6 conditions met`);
       if (news.override_wait) { action = "WAIT"; waitReason = news.override_reason || "High news risk within 2h"; }
 
       const out = {
@@ -88,7 +88,7 @@ export default function ScalpEngine({ onBack, toggle }) {
         entry: s.entry ? f5(s.entry) : f5(price), stop: f5(s.stop), t1: f5(s.t1), t2: f5(s.t2),
         stop_pips: s.stopPips, t1_pips: s.t1Pips, t2_pips: s.t2Pips,
         quality: s.quality, qLabel: s.qLabel, lotRec: s.lotRec,
-        confidence: s.quality >= 80 ? "HIGH" : s.quality >= 65 ? "MEDIUM" : "LOW",
+        confidence: s.capLowConf ? "LOW" : s.quality >= 80 ? "HIGH" : s.quality >= 65 ? "MEDIUM" : "LOW",
         session: session.label, session_quality: session.quality,
         spread_warning: news.spread_warning || session.quality === "avoid",
         news_risk: news.news_risk || "LOW", news_note: news.news_note || "", sources: news.sources || [],
@@ -235,6 +235,10 @@ export default function ScalpEngine({ onBack, toggle }) {
             </div>
             {sig.action === "WAIT" && <p style={{ fontSize: 11, color: "#fbbf24", ...mono, margin: "8px 0 0" }}>⏳ {sig.waitReason}</p>}
             {sig.action !== "WAIT" && <p style={{ fontSize: 11, color: T.accentText, ...mono, margin: "8px 0 0" }}>Target exit: {sig.hold_time} · recommended size: {sig.lotRec}</p>}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "6px 10px", background: "#020617", borderRadius: 8 }}>
+              <span style={{ ...mono, fontSize: 11, color: "#64748b" }}>Noise Score</span>
+              <span style={{ ...mono, fontSize: 12, color: s.noiseScore < 30 ? "#4ade80" : s.noiseScore < 60 ? "#fbbf24" : "#f87171" }}>{s.noiseScore}/100 — {s.noiseLabel}{s.capLowConf ? " · conf capped LOW" : ""}</span>
+            </div>
           </div>
 
           {/* Entry/levels with €0.01 + €0.05 */}
@@ -293,7 +297,15 @@ export default function ScalpEngine({ onBack, toggle }) {
             <Row k="News risk (2h)" v={`${sig.news_risk}${sig.news_note ? " · " + sig.news_note : ""}`} good={sig.news_risk === "LOW"} />
             <Row k="Session quality" v={`${sig.session} (${sig.session_quality})`} good={sig.session_quality !== "avoid"} />
             <Row k="Volatility ATR(7)" v={`${s.atrPips} pips/candle${s.tooQuiet ? " — too quiet" : s.tooVolatile ? " — too volatile" : ""}`} good={!s.tooQuiet && !s.tooVolatile} />
+            <Row k="Signal candle body" v={`${(s.bodyRatio * 100).toFixed(0)}%${s.indecision ? " — indecision" : ""}`} good={!s.indecision} />
+            <Row k="Candle timing" v={s.candleTooFresh ? `${Math.floor(s.candleAgeSec / 60)}:${String(s.candleAgeSec % 60).padStart(2, "0")} old — too fresh` : `${Math.floor(s.candleSecLeft / 60)}:${String(s.candleSecLeft % 60).padStart(2, "0")} to close`} good={!s.candleTooFresh} />
+            <Row k="Candle range" v={`${(s.curRange / 0.0001).toFixed(1)}p vs ${(s.avgRange50 / 0.0001).toFixed(1)}p avg${s.belowNoiseFloor ? " — below floor" : ""}`} good={!s.belowNoiseFloor} />
+            <Row k="Volume (5m + 15m)" v={s.bothVolConfirmed ? "both >120% confirmed" : s.volOnly5m ? "5m only — possible noise" : "not confirmed"} good={s.bothVolConfirmed} />
+            <Row k="2-candle confirm" v={s.twoCandleConfirmed ? "both candles aligned" : "single candle only"} good={s.twoCandleConfirmed} />
             <Row k="Recommended size" v={sig.lotRec} good={null} />
+            {s.noiseFlags.length > 0
+              ? <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #1e293b" }}>{s.noiseFlags.map((f, i) => <p key={i} style={{ fontSize: 10, color: "#fb923c", ...mono, margin: "2px 0" }}>⚠ {f}</p>)}</div>
+              : <p style={{ fontSize: 10, color: "#4ade80", ...mono, margin: "6px 0 0" }}>✓ No noise flags — clean setup</p>}
           </div>
 
           {/* Exit rules (always visible in scalp) */}

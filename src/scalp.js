@@ -155,16 +155,62 @@ export const analyzeScalp = ({ c1m, c5m, c15m, c1h, price }) => {
   } else if (dir !== "WAIT") {
     dir = "WAIT"; // volatility gate failed
   }
+
+  // ─── NOISE FILTERS (additive — adjust quality + build a 0–100 noise score) ──
+  const li = c5m.closes.length - 1;
+  // 1. body-to-range ratio of the signal candle (5m)
+  o.bodyRatio = Math.abs(c5m.closes[li] - c5m.opens[li]) / ((c5m.highs[li] - c5m.lows[li]) || 1e-9);
+  o.indecision = o.bodyRatio < 0.5;
+  // 2. noise floor — current range vs 50-candle average
+  const ranges = [];
+  for (let i = Math.max(0, c5m.closes.length - 50); i < c5m.closes.length; i++) ranges.push(c5m.highs[i] - c5m.lows[i]);
+  o.avgRange50 = ranges.reduce((a, b) => a + b, 0) / ranges.length;
+  o.curRange = c5m.highs[li] - c5m.lows[li];
+  o.belowNoiseFloor = o.curRange < 1.3 * o.avgRange50;
+  // 3. multi-timeframe volume (5m AND 15m both >120% of their 20-avg)
+  o.vol15 = volState(c15m.volumes);
+  o.bothVolConfirmed = !!(o.vol && o.vol15 && o.vol.ratio > 1.2 && o.vol15.ratio > 1.2);
+  o.volOnly5m = !!(o.vol && o.vol.ratio > 1.2) && !(o.vol15 && o.vol15.ratio > 1.2);
+  // 4. two-candle confirmation (current AND previous 5m close beyond EMA21)
+  const twoLong = c5m.closes[li] > e21.at(-1) && c5m.closes[li - 1] > e21.at(-2);
+  const twoShort = c5m.closes[li] < e21.at(-1) && c5m.closes[li - 1] < e21.at(-2);
+  o.twoCandleConfirmed = dir === "LONG" ? twoLong : dir === "SHORT" ? twoShort : false;
+  // 5. spread-adjusted minimum move (typical spread ~1.5 pips → need ≥4.5 pips)
+  o.moveTooSmall = o.stopPips < 3 * 1.5;
+  // 6. candle timing — only fire in the last 2 min of the 5m candle
+  const now = new Date();
+  o.candleAgeSec = (now.getUTCMinutes() % 5) * 60 + now.getUTCSeconds();
+  o.candleSecLeft = 300 - o.candleAgeSec;
+  o.candleTooFresh = o.candleAgeSec < 180;
+
+  // hard gates that flip the signal to WAIT
+  if (dir !== "WAIT") {
+    if (o.candleTooFresh) { dir = "WAIT"; o.gateReason = `Wait for candle to develop — ${Math.floor(o.candleAgeSec / 60)}:${String(o.candleAgeSec % 60).padStart(2, "0")} into 5m candle (act in last 2 min)`; }
+    else if (o.moveTooSmall) { dir = "WAIT"; o.gateReason = "Move too small relative to spread — skip"; }
+  }
+
   o.dir = dir; o.met = met; o.conds = conds;
 
-  // quality
+  // quality (base + bonuses + noise penalties)
   let q = met * 12;
   if (dir === "LONG" && o.aboveEma50_15m) q += 10;
   if (dir === "SHORT" && o.aboveEma50_15m === false) q += 10;
-  if (o.vol && o.vol.cls === "HIGH") q += 8;
+  if (o.bothVolConfirmed) q += 8;                                  // full bonus only if BOTH TFs
   if (["R1", "R2", "S1", "S2"].includes(o.pivotNearest)) q += 10;
   if (o.asianPos !== "INSIDE") q += 8;
-  o.quality = dir === "WAIT" ? Math.min(49, q) : Math.min(100, q);
+
+  // 7. noise score = sum of noise penalties (0 clean → 100 noisy)
+  const flags = []; let noise = 0;
+  if (o.indecision) { q -= 15; noise += 25; flags.push("Indecision candle — low conviction (body " + (o.bodyRatio * 100).toFixed(0) + "%)"); }
+  if (o.belowNoiseFloor) { q -= 10; noise += 20; flags.push("Below noise floor — weak move"); }
+  if (o.volOnly5m) { noise += 15; flags.push("Volume only on 5m — possible noise"); }
+  if (dir !== "WAIT" && !o.twoCandleConfirmed) { q -= 10; noise += 20; flags.push("Single-candle signal — no 2-candle confirm"); }
+  o.noiseScore = Math.max(0, Math.min(100, noise));
+  o.noiseLabel = o.noiseScore < 30 ? "Clean move" : o.noiseScore < 60 ? "Moderate noise" : "High noise — low conviction";
+  o.noiseFlags = flags;
+  o.capLowConf = o.noiseScore > 60;
+
+  o.quality = dir === "WAIT" ? Math.min(49, Math.max(0, q)) : Math.max(0, Math.min(100, q));
   o.qLabel = o.quality < 50 ? "NO SCALP" : o.quality < 65 ? "LOW" : o.quality < 80 ? "MEDIUM" : "HIGH";
   o.lotRec = o.quality < 50 ? "—" : o.quality < 65 ? "paper only" : o.quality < 80 ? "0.01–0.02 lots" : "0.03–0.05 lots";
   return o;
