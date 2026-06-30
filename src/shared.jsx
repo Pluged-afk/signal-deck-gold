@@ -288,6 +288,11 @@ triggers — be SPECIFIC and ACTIONABLE. Use the pre-computed swing S/R, fib lev
 
 For LONG/SHORT: watch_long/watch_short may be "n/a", but invalidation, invalidation_note, news_time/news_event and a refresh_recommendation (e.g. "hold; re-check at the next 4h close or if price hits the invalidation level") are still REQUIRED.`;
 
+// ─── Session cost tracking (counts paid Anthropic calls this browser session) ─
+export const EST_COST = 0.18; // € per paid signal (low estimate; range ~0.18–0.70)
+export const bumpSignalCount = () => { try { const n = (parseInt(sessionStorage.getItem("sdg_calls")) || 0) + 1; sessionStorage.setItem("sdg_calls", String(n)); return n; } catch (_) { return 0; } };
+export const signalCount = () => { try { return parseInt(sessionStorage.getItem("sdg_calls")) || 0; } catch (_) { return 0; } };
+
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
 export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };

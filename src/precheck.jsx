@@ -1,4 +1,4 @@
-import { mono, card, lbl, fmt } from "./shared";
+import { mono, card, lbl, fmt, egyptWindow } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Lightweight LOCAL pre-check that runs before the paid Anthropic call. Fetches
@@ -68,9 +68,10 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
     };
   }
 
-  // 3 — binary event within 4h (local calendar)
-  const soon = (events || []).find(e => e.date && (e.date - now) > 0 && (e.date - now) <= 4 * 3600000);
-  const evt = { name: "Binary event", ok: !soon, detail: soon ? `${soon.label} in ${((soon.date - now) / 3600000).toFixed(1)}h — mandatory WAIT` : "none within 4h" };
+  // 3 — binary event within 72h → block the paid signal entirely (cost guard)
+  const BLOCK_H = 72;
+  const soon = (events || []).find(e => e.date && (e.date - now) > 0 && (e.date - now) <= BLOCK_H * 3600000);
+  const evt = { name: "Binary event", ok: !soon, detail: soon ? `${soon.label} ${soon.in} (${soon.ds} · ${soon.tEgy} EGY) — no paid signal within 72h` : "none within 72h" };
 
   // 4 — minimum 45 min since last refresh
   const since = pc.lastRefresh ? now - pc.lastRefresh : Infinity;
@@ -78,7 +79,7 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
   const time = { name: "Min interval", ok: timeOk, detail: timeOk ? (pc.lastRefresh ? `${Math.round(since / 60000)} min since last refresh` : "first run") : `only ${Math.round(since / 60000)} min since last — wait ${MIN_INTERVAL_MIN - Math.round(since / 60000)} min` };
 
   const checks = [sess, price2, evt, time];
-  return { pass: checks.every(c => c.ok), checks, price, src, saved: COST_PER_CALL };
+  return { pass: checks.every(c => c.ok), checks, price, src, saved: COST_PER_CALL, binary: soon || null, levels: pc.levels || [] };
 };
 
 // One-line summary for the status row under the refresh button.
@@ -88,6 +89,48 @@ export const precheckSummary = r => {
   const failed = r.checks.find(c => !c.ok);
   return `not met (${failed.name.toLowerCase()})`;
 };
+
+// ═══ Binary-event block (free) — shown when an event is within 72h ═══════════
+// Costs €0: no Anthropic call. Shows a free market summary so the user stays
+// informed, plus when the event clears and the next clean session window.
+export function BinaryBlockCard({ result, config, pricePrefix = "", onOverride }) {
+  const b = result.binary; if (!b) return null;
+  const price = result.price;
+  const nextBest = config.sessionsGuide.find(s => s.quality === "best") || config.sessionsGuide[0];
+  // nearest stored levels to current price
+  const levels = (result.levels || []).slice().sort((a, c) => Math.abs(a - price) - Math.abs(c - price)).slice(0, 4)
+    .sort((a, c) => c - a);
+  const fpx = v => `${pricePrefix}${v.toFixed(dp(price || 1))}`;
+
+  return (
+    <div style={{ ...card, background: "#1c1408", border: "1px solid #78350f", marginBottom: 10 }}>
+      <p style={{ fontSize: 14, fontWeight: 700, color: "#fbbf24", margin: "0 0 2px" }}>⏳ Binary Event — paid signal blocked</p>
+      <p style={{ ...mono, fontSize: 12, color: "#e2e8f0", margin: "0 0 4px" }}>{b.label} {b.in} — {b.ds} · {b.tEgy} EGY</p>
+      <p style={{ ...mono, fontSize: 11, color: "#94a3b8", margin: "0 0 12px" }}>No signal until the event clears. €0 spent — no AI call made on a guaranteed WAIT.</p>
+
+      <p style={{ ...lbl, color: "#64748b" }}>Free market summary</p>
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #1e293b" }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>Current price {result.src ? `(${result.src})` : ""}</span>
+        <span style={{ ...mono, fontSize: 12, color: "#e2e8f0" }}>{price != null ? `${pricePrefix}${price}` : "—"}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #1e293b" }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>Next clean window</span>
+        <span style={{ ...mono, fontSize: 11, color: "#94a3b8" }}>{nextBest ? `${nextBest.window} / ${egyptWindow(nextBest.window)}` : "—"}</span>
+      </div>
+      <div style={{ padding: "6px 0" }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>Key levels to watch {levels.length ? "" : "(run a signal first)"}</span>
+        {levels.length > 0 && <p style={{ ...mono, fontSize: 12, color: "#e2e8f0", margin: "3px 0 0" }}>{levels.map(fpx).join("  ·  ")}</p>}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>Refresh after {b.ds} · {b.tEgy} EGY</span>
+        <button onClick={onOverride} style={{ padding: "7px 14px", background: "#1e3a5f", border: "1px solid #2563eb", borderRadius: 8, color: "#60a5fa", fontSize: 11, cursor: "pointer", ...mono }}>
+          Run paid signal anyway →
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ═══ Results card (shown only when the pre-check blocks a full signal) ═══════
 export function PrecheckCard({ result, pricePrefix = "", onOverride }) {

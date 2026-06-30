@@ -4,10 +4,11 @@ import {
   aStyl, rStyl, cCol, sCol, qCol,
   parseJSON, runAI, isWeekend, upcomingEvents,
   loadKeys, saveKeys, WAIT_RULES, egyptWindow, urgencyCol, inWindow,
+  bumpSignalCount, signalCount, EST_COST,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
-import { runPreCheck, storeSignalForPrecheck, PrecheckCard, precheckSummary } from "./precheck";
+import { runPreCheck, storeSignalForPrecheck, PrecheckCard, BinaryBlockCard, precheckSummary } from "./precheck";
 import { localWait } from "./ta";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
@@ -25,7 +26,10 @@ export default function AssetEngine({ config, onBack }) {
   const [showLog, setShowLog] = useState(false);
   const [precheck, setPrecheck] = useState(null);
   const [prechecking, setPrechecking] = useState(false);
+  const [tdWarn, setTdWarn] = useState(false);
+  const [costN, setCostN] = useState(signalCount());
   const logRef = useRef([]);
+  const usesTD = config.keyFields.some(f => f.field === "td");
 
   const addLog = msg => { logRef.current=[...logRef.current,`[${new Date().toLocaleTimeString()}] ${msg}`]; setDataLog([...logRef.current]); };
 
@@ -52,6 +56,7 @@ export default function AssetEngine({ config, onBack }) {
       }
 
       addLog("Sending to AI for news + synthesis...");
+      setCostN(bumpSignalCount()); // count this paid Anthropic call
       const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
@@ -76,14 +81,17 @@ export default function AssetEngine({ config, onBack }) {
   }, [keys, config]);
 
   // Free local pre-check first; only call the paid signal if all conditions pass.
-  const attemptSignal = useCallback(async () => {
+  const attemptSignal = useCallback(async (opts={}) => {
     if(!keys.anthropic){ setError("Anthropic API key required."); setKeysSet(false); return; }
+    // Fix 2: warn before spending if Twelve Data key is missing on a TD-backed asset
+    if(usesTD && !keys.td && !opts.ackTD){ setTdWarn(true); setPrecheck(null); return; }
+    setTdWarn(false);
     setPrechecking(true); setError(null);
     const res = await runPreCheck({ config, keys, events });
     setPrechecking(false);
     setPrecheck({ ...res, ts:Date.now() });
     if(res.pass) fetchSignal();
-  }, [keys, config, events, fetchSignal]);
+  }, [keys, config, events, fetchSignal, usesTD]);
 
   const as = sig?aStyl(sig.action):{};
   const sc = sig?.scorecard||{};
@@ -122,13 +130,35 @@ export default function AssetEngine({ config, onBack }) {
         </div>
       )}
 
-      {/* Pre-check status + blocked card (free local gate before the paid call) */}
+      {/* Session cost (fix 3) */}
+      {costN>0&&(
+        <p style={{...mono,fontSize:10,color:"#64748b",margin:"0 0 8px",textAlign:"right"}}>
+          Session: {costN} paid signal{costN>1?"s":""} · ~€{(costN*EST_COST).toFixed(2)} (est.)
+        </p>
+      )}
+
+      {/* TD-missing warning (fix 2) */}
+      {tdWarn&&!loading&&(
+        <div style={{...card,background:T.panelBg,border:`1px solid ${T.panelBorder}`,marginBottom:10}}>
+          <p style={{fontSize:13,fontWeight:700,color:T.accentText,margin:"0 0 4px"}}>⚠ Twelve Data key missing</p>
+          <p style={{fontSize:11,color:"#cbd5e1",margin:"0 0 4px",lineHeight:1.5}}>Without it, MACD / RSI / ATR / EMAs / candle patterns / multi-timeframe analysis are <b>unavailable</b> — the AI infers them instead. Estimated accuracy reduction is significant (no real OHLCV). Price still comes from a free source.</p>
+          <div style={{display:"flex",gap:10,marginTop:8}}>
+            <button onClick={()=>{setTdWarn(false);setKeysSet(false);}} style={{...primaryBtn,fontSize:11}}>Enter key →</button>
+            <button onClick={()=>attemptSignal({ackTD:true})} style={{...ghostBtn,fontSize:11}}>Continue with reduced accuracy →</button>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-check status + blocked cards (free local gate before the paid call) */}
       {precheck&&!loading&&(
         <p style={{...mono,fontSize:10,color:"#475569",margin:"0 0 8px",textAlign:"right"}}>
           Last pre-check: just now — {precheckSummary(precheck)}{precheck.pass?" ✓":""}
         </p>
       )}
-      {precheck&&!precheck.pass&&!loading&&(
+      {precheck&&precheck.binary&&!loading&&(
+        <BinaryBlockCard result={precheck} config={config} pricePrefix={config.pricePrefix} onOverride={fetchSignal}/>
+      )}
+      {precheck&&!precheck.pass&&!precheck.binary&&!loading&&(
         <PrecheckCard result={precheck} pricePrefix={config.pricePrefix} onOverride={fetchSignal}/>
       )}
 
@@ -157,7 +187,7 @@ export default function AssetEngine({ config, onBack }) {
       )}
 
       {/* Ready */}
-      {keysSet&&!sig&&!loading&&!error&&!(precheck&&!precheck.pass)&&(
+      {keysSet&&!sig&&!loading&&!error&&!tdWarn&&!(precheck&&!precheck.pass)&&(
         <div style={{...card,textAlign:"center",padding:"2.5rem 1.5rem"}}>
           <p style={{...mono,fontSize:13,color:"#64748b",margin:"0 0 8px"}}>{config.name} ready</p>
           {config.readyLines(keys).map((l,i)=><p key={i} style={{fontSize:11,color:"#475569",margin:"0 0 4px"}}>{l}</p>)}
