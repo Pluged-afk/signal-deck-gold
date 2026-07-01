@@ -324,4 +324,25 @@ export const signalCount = () => { try { return parseInt(sessionStorage.getItem(
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
 export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };
-export const saveKeys = k => { try { localStorage.setItem(KEY_STORE, JSON.stringify(k)); } catch(_){} };
+// Saving also pushes to the encrypted server store (/api/keys, gated by the login
+// cookie) so keys survive browser clears and follow the passcode across devices.
+export const saveKeys = k => {
+  try { localStorage.setItem(KEY_STORE, JSON.stringify(k)); } catch(_){}
+  try { fetch("/api/keys", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(k) }); } catch(_){}
+};
+// Pull server-stored keys on app load; merge into localStorage if the server has
+// an Anthropic key (server wins over an empty local store, local edits win later).
+export const syncKeysFromServer = async () => {
+  try {
+    const r = await fetch("/api/keys", { cache:"no-store" });
+    if (!r.ok) return null;
+    const k = await r.json();
+    if (k && k.anthropic) {
+      const local = loadKeys();
+      const merged = { ...k, ...(local.anthropic ? local : {}) };
+      try { localStorage.setItem(KEY_STORE, JSON.stringify(merged)); } catch(_){}
+      return merged;
+    }
+  } catch(_){}
+  return null;
+};

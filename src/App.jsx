@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Landing from "./Landing";
 import AssetEngine from "./AssetEngine";
 import ScalpEngine from "./ScalpEngine";
 import { ASSETS } from "./assets";
-import { mono } from "./shared";
+import { mono, syncKeysFromServer } from "./shared";
 
 // Mode toggle shown on the EUR/USD page (swing vs scalp).
 function ModeToggle({ mode, onChange }) {
@@ -28,6 +28,10 @@ export default function App() {
   const [unlocked, setUnlocked] = useState(false);
   const [asset, setAsset] = useState(null);
   const [eurMode, setEurMode] = useState("swing");
+
+  // Pull encrypted server-stored API keys once on load (user is on the landing
+  // page at this point, so keys are in localStorage before an engine mounts).
+  useEffect(() => { syncKeysFromServer(); }, []);
 
   if (!asset) return <Landing onSelect={a => { setEurMode("swing"); setAsset(a); }} />;
 

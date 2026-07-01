@@ -182,7 +182,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         <div style={{...card,marginBottom:12}}>
           <p style={{...lbl,color:T.accentText,marginBottom:12}}>🔑 API Key Setup</p>
           <p style={{fontSize:12,color:"#64748b",margin:"0 0 16px",lineHeight:1.6}}>
-            Keys are saved in your browser (localStorage) and shared across Gold & EUR/USD. They are sent only to the API they belong to.
+            Keys are saved in your browser AND in an encrypted server store gated by your login — enter once, they follow your passcode on any device. They are sent only to the API they belong to.
             {config.dataNote&&<><br/><span style={{color:T.accentText}}>{config.dataNote}</span></>}
           </p>
           {config.keyFields.map(({field,label,hint,ph})=>(

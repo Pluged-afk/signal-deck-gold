@@ -164,7 +164,9 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
-    const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`); const d=await r.json(); return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null; };
+    // Returns latest value + direction vs the prior reading (we already fetch 5
+    // observations — direction was being thrown away, yet the scorecard rules on it).
+    const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
 
     addLog("Fetching spot price...");
     let spot=null;
@@ -217,9 +219,13 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(keys.fred){ try{
       addLog("Fetching FRED yields + DXY in parallel...");
       const [nominal,tips,dxy]=await Promise.all([fred("DGS10"),fred("T10YIE"),fred("DTWEXBGS")]);
-      macro.nominal=nominal; macro.tips=tips; macro.dxy=dxy;
-      if(nominal&&tips) macro.realYield=p2(nominal-tips);
-      addLog(`FRED → real:${macro.realYield}% DXY:${macro.dxy}`);
+      macro.nominal=nominal.v; macro.tips=tips.v; macro.dxy=dxy.v; macro.dxyDir=dxy.dir;
+      if(nominal.v!=null&&tips.v!=null){
+        macro.realYield=p2(nominal.v-tips.v);
+        const ryPrev=(nominal.prev!=null&&tips.prev!=null)?nominal.prev-tips.prev:null;
+        macro.realYieldDir=ryPrev!=null?(macro.realYield>p2(ryPrev)?"RISING":macro.realYield<p2(ryPrev)?"FALLING":"FLAT"):"unknown";
+      }
+      addLog(`FRED → real:${macro.realYield}% (${macro.realYieldDir||"?"}) DXY:${macro.dxy} (${macro.dxyDir})`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
     addLog("Fetching COT (CFTC)...");
@@ -260,7 +266,8 @@ VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h
 
 ATR & STOP  1h:$${f2(td?.atr1h)} | 4h:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na(stopPct)}%)
 
-MACRO — FRED  10Y Nominal:${na(macro.nominal)}% | Real Yield:${na(macro.realYield)}%${macro.realYield!==null?(macro.realYield>1.5?" (HIGH — bearish)":macro.realYield<0.5?" (LOW — bullish)":" (moderate)"):""} | DXY:${na(macro.dxy)}
+MACRO — FRED (with direction vs prior reading — scorecard rule 5 uses DIRECTION: both FALLING = PASS LONG, both RISING = PASS SHORT)
+  10Y Nominal:${na(macro.nominal)}% | Real Yield:${na(macro.realYield)}% ${macro.realYieldDir||""}${macro.realYield!==null?(macro.realYield>1.5?" (HIGH — bearish)":macro.realYield<0.5?" (LOW — bullish)":" (moderate)"):""} | DXY:${na(macro.dxy)} ${macro.dxyDir||""}
 
 COT — CFTC Managed Money  Net:${cot?.netMM?.toLocaleString()??"n/a"} | WeekΔ:${cot?.weekChange?.toLocaleString()??"n/a"} | ${na(cot?.sentiment)} (>200k crowded long=bearish, <50k crowded short=bullish)
 
@@ -282,8 +289,8 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(td?.l24&&!p.low_24h)  p.low_24h=String(td.l24);
     if(td?.ma200)            p.ma200=td.ma200.toFixed(2);
     if(td?.vwap&&!p.vwap)    p.vwap=td.vwap.toFixed(2);
-    if(macro.realYield!==null) p.real_yield=`${macro.realYield}%`;
-    if(macro.dxy!==null)       p.dxy=String(macro.dxy);
+    if(macro.realYield!==null) p.real_yield=`${macro.realYield}%${macro.realYieldDir?` — ${macro.realYieldDir.toLowerCase()}`:""}`;
+    if(macro.dxy!==null)       p.dxy=`${macro.dxy}${macro.dxyDir?` — ${macro.dxyDir.toLowerCase()}`:""}`;
     if(cot&&!p.cot_net)        p.cot_net=cot.netMM?.toLocaleString();
     if(cot&&!p.cot_sentiment)  p.cot_sentiment=cot.sentiment;
     if(td?.pdh!=null) p.pdh=td.pdh.toFixed(2);
@@ -424,7 +431,9 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
-    const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=5`); const d=await r.json(); return (d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value))[0]??null; };
+    // Returns latest value + direction vs the prior reading (we already fetch 5
+    // observations — direction was being thrown away, yet the scorecard rules on it).
+    const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
 
     addLog("Fetching EUR/USD spot...");
     let spot=null;
@@ -469,8 +478,8 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(keys.fred){ try{
       addLog("Fetching FRED DXY + Fed funds + 10Y in parallel...");
       const [dxy,fedfunds,dgs10]=await Promise.all([fred("DTWEXBGS"),fred("FEDFUNDS"),fred("DGS10")]);
-      macro.dxy=dxy; macro.fedfunds=fedfunds; macro.dgs10=dgs10;
-      addLog(`FRED → DXY:${dxy} FedFunds:${fedfunds}% 10Y:${dgs10}%`);
+      macro.dxy=dxy.v; macro.dxyDir=dxy.dir; macro.fedfunds=fedfunds.v; macro.dgs10=dgs10.v; macro.dgs10Dir=dgs10.dir;
+      addLog(`FRED → DXY:${macro.dxy} (${macro.dxyDir}) FedFunds:${macro.fedfunds}% 10Y:${macro.dgs10}% (${macro.dgs10Dir})`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
     const session=getFxSession();
@@ -497,8 +506,8 @@ PIVOTS (from prior daily candle)  P:${ff(td?.pivots?.P)} | R1:${ff(td?.pivots?.R
 
 ATR & STOP (4h)  ATR:${ff(td?.atr4h)} | Recommended stop: ${ff(stopAmt)} (${stopPips??"~50"} pips, 1.5x ATR)
 
-MACRO — FRED  DXY (Fed TWI):${na(macro.dxy)} | Fed Funds:${na(macro.fedfunds)}% | US 10Y:${na(macro.dgs10)}%
-  (DXY is ~95% inverse to EUR/USD — rising DXY = bearish EUR. Use web search for ECB policy rate & latest decisions to compute the Fed-vs-ECB differential.)
+MACRO — FRED  DXY (Fed TWI):${na(macro.dxy)} ${macro.dxyDir||""} | Fed Funds:${na(macro.fedfunds)}% | US 10Y:${na(macro.dgs10)}% ${macro.dgs10Dir||""}
+  (DXY direction is computed locally vs the prior reading — scorecard rule 4 uses it directly: DXY FALLING = PASS LONG, RISING = PASS SHORT. DXY is ~95% inverse to EUR/USD. Use web search for ECB policy rate & latest decisions to compute the Fed-vs-ECB differential.)
 
 EUR/USD CONTEXT  50 EMA (1h):${ff(td?.ema50_1h)} → price ${td?.ema50_1h?(spot.price>td.ema50_1h?"ABOVE (short-term bullish)":"BELOW (short-term bearish)"):"unknown"}
   Asian range (00-08 UTC): high ${ff(td?.asianHigh)} / low ${ff(td?.asianLow)} → break above high = potential LONG trigger, break below low = potential SHORT trigger (use as watch_long/watch_short)
@@ -521,7 +530,7 @@ ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unava
     if(td?.pivots?.P&&!p.pivot) p.pivot=td.pivots.P.toFixed(5);
     if(td?.pdh!=null) p.pdh=td.pdh.toFixed(5);
     if(td?.pdl!=null) p.pdl=td.pdl.toFixed(5);
-    if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=String(macro.dxy);
+    if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=`${macro.dxy}${macro.dxyDir?` — ${macro.dxyDir.toLowerCase()}`:""}`;
     p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
     mergeTA(p, ta, v=>v.toFixed(5));
   },
