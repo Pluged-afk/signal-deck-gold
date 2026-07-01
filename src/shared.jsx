@@ -230,13 +230,38 @@ export async function runAI({ apiKey, system, userContent, addLog, model="claude
   let history=[{ role:"user", content:userContent }];
   let finalText="";
 
+  // PROMPT CACHING: each search iteration re-sends the whole growing conversation
+  // (system + data package + all search results) as input tokens. Marking the
+  // system block + the last content block as ephemeral cache breakpoints lets the
+  // repeated prefix be re-read at ~10% of the input price. temperature:0 makes the
+  // signal deterministic (same data → same call). Falls back automatically if the
+  // API ever rejects a cache marker.
+  const systemBlocks=[{ type:"text", text:system, cache_control:{ type:"ephemeral" } }];
+  const withCacheMark = msgs => msgs.map((m,idx)=>{
+    if(idx!==msgs.length-1) return m;
+    let c=m.content;
+    if(typeof c==="string") c=[{ type:"text", text:c }];
+    else c=c.map(b=>{ const { cache_control, ...rest }=b; return rest; });
+    if(!c.length) return m;
+    c=[...c.slice(0,-1), { ...c[c.length-1], cache_control:{ type:"ephemeral" } }];
+    return { ...m, content:c };
+  });
+  let useCache=true;
+
   for(let i=0;i<10;i++){
     const res=await fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
       headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" },
-      body:JSON.stringify({ model, max_tokens:maxTokens, system, tools, messages:history })
+      body:JSON.stringify({ model, max_tokens:maxTokens, temperature:0,
+        system:useCache?systemBlocks:system, tools,
+        messages:useCache?withCacheMark(history):history })
     });
-    if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e?.error?.message||`API error ${res.status}`); }
+    if(!res.ok){
+      const e=await res.json().catch(()=>({}));
+      const msg=e?.error?.message||`API error ${res.status}`;
+      if(useCache&&/cache/i.test(msg)){ useCache=false; addLog&&addLog("Prompt caching rejected — retrying without"); i--; continue; }
+      throw new Error(msg);
+    }
     const data=await res.json();
 
     const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");

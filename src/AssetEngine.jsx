@@ -58,7 +58,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       addLog("Sending to AI for news + synthesis...");
       setCostN(bumpSignalCount()); // count this paid Anthropic call
-      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog });
+      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog, maxSearches:5 });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
       config.merge(parsed, meta);

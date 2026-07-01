@@ -1,4 +1,4 @@
-import { mono, card, lbl, fmt, egyptWindow } from "./shared";
+import { mono, card, lbl, egyptWindow } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Lightweight LOCAL pre-check that runs before the paid Anthropic call. Fetches
@@ -39,9 +39,8 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
   const id = config.id;
   const now = Date.now();
   let pc = loadPC(id);
-  // Expire levels older than 24h so yesterday's structure can't block today's signals.
-  let staleReset = false;
-  if (pc.lastRefresh && (now - pc.lastRefresh) > STALE_MS) { clearPC(id); pc = {}; staleReset = true; }
+  // Expire stored state older than 24h so yesterday's data can't affect today.
+  if (pc.lastRefresh && (now - pc.lastRefresh) > STALE_MS) { clearPC(id); pc = {}; }
   const h = new Date().getUTCHours();
 
   // free spot price
@@ -139,7 +138,7 @@ export function PrecheckCard({ result, pricePrefix = "", onOverride }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
         <span style={{ fontSize: 11, color: "#64748b" }}>
-          Next check: {fail.name === "Price location" && fail.best ? `when price reaches ~${fail.best.l.toFixed(dp(result.price))}` : fail.name === "Min interval" ? "after the 45-min window" : fail.name === "Binary event" ? "after the event + 30 min" : "next good session"}
+          Next check: {fail.name === "Min interval" ? "after the 45-min window" : fail.name === "Binary event" ? "after the event + 30 min" : "next good session"}
         </span>
         <button onClick={onOverride} style={{ padding: "7px 14px", background: "#1e3a5f", border: "1px solid #2563eb", borderRadius: 8, color: "#60a5fa", fontSize: 11, cursor: "pointer", ...mono }}>
           Run full signal anyway →

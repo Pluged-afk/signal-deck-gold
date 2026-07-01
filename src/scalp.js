@@ -86,7 +86,7 @@ const nearestPivot = (price, pv) => {
 };
 
 // ─── scalp aggregator ────────────────────────────────────────────────────────
-export const analyzeScalp = ({ c1m, c5m, c15m, c1h, price }) => {
+export const analyzeScalp = ({ c5m, c15m, c1h, price }) => {
   const o = {};
   const e8 = calcEMA(c5m.closes, 8), e21 = calcEMA(c5m.closes, 21);
   o.ema8 = e8.at(-1); o.ema21 = e21.at(-1);

@@ -62,13 +62,14 @@ export default function ScalpEngine({ onBack, toggle }) {
   const runScalp = useCallback(async () => {
     setPrecheck(null); setLoading(true); setError(null); logRef.current = []; setDataLog([]);
     try {
-      addLog("Fetching 1m/5m/15m/1h candles in parallel...");
-      const settled = await Promise.allSettled([tdc("1min", 60), tdc("5min", 60), tdc("15min", 60), tdc("1h", 50)]);
-      const [c1m, c5m, c15m, c1h] = settled.map(r => r.status === "fulfilled" ? r.value : null);
-      settled.forEach((r, i) => { if (r.status === "rejected") addLog(`${["1m", "5m", "15m", "1h"][i]} failed: ${r.reason?.message || r.reason}`); });
+      addLog("Fetching 5m/15m/1h candles in parallel...");
+      // (1m dropped — no indicator consumed it; saves a TD credit per scan)
+      const settled = await Promise.allSettled([tdc("5min", 60), tdc("15min", 60), tdc("1h", 50)]);
+      const [c5m, c15m, c1h] = settled.map(r => r.status === "fulfilled" ? r.value : null);
+      settled.forEach((r, i) => { if (r.status === "rejected") addLog(`${["5m", "15m", "1h"][i]} failed: ${r.reason?.message || r.reason}`); });
       if (!c5m || !c15m || !c1h) throw new Error("Missing 5m/15m/1h candles — cannot scalp.");
       const price = c5m.closes.at(-1);
-      const s = analyzeScalp({ c1m, c5m, c15m, c1h, price });
+      const s = analyzeScalp({ c5m, c15m, c1h, price });
       addLog(`Scalp: ${s.dir} ${s.met}/6 · quality ${s.quality} · ATR ${s.atrPips}p · EMA bias ${s.emaBias}`);
 
       addLog("AI news + spread check (max 2 searches)...");
