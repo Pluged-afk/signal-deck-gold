@@ -210,9 +210,12 @@ export const analyzeScalp = ({ c1m, c5m, c15m, c1h, price }) => {
   o.noiseFlags = flags;
   o.capLowConf = o.noiseScore > 60;
 
-  o.quality = dir === "WAIT" ? Math.min(49, Math.max(0, q)) : Math.max(0, Math.min(100, q));
-  o.qLabel = o.quality < 50 ? "NO SCALP" : o.quality < 65 ? "LOW" : o.quality < 80 ? "MEDIUM" : "HIGH";
-  o.lotRec = o.quality < 50 ? "—" : o.quality < 65 ? "paper only" : o.quality < 80 ? "0.01–0.02 lots" : "0.03–0.05 lots";
+  o.quality = Math.max(0, Math.min(100, q));
+  // softened gate: quality <35 → no tradeable scalp (WAIT); 35-50 fires as LOW
+  if (dir !== "WAIT" && o.quality < 35) { dir = "WAIT"; o.gateReason = o.gateReason || `Quality ${o.quality}/100 below 35 — no tradeable scalp`; }
+  o.dir = dir;
+  o.qLabel = o.quality < 35 ? "NO SCALP" : o.quality < 65 ? "LOW" : o.quality < 80 ? "MEDIUM" : "HIGH";
+  o.lotRec = o.quality < 35 ? "—" : o.quality < 65 ? "paper only / min size" : o.quality < 80 ? "0.01–0.02 lots" : "0.03–0.05 lots";
   return o;
 };
 

@@ -184,9 +184,70 @@ export const trendOf = closes => {
   return p > e * 1.0005 ? "BULL" : p < e * 0.9995 ? "BEAR" : "FLAT";
 };
 
+// ─── trend-context helpers (weighted inputs for the AI, not hard rules) ───────
+const trendStrength = (adx, adxPrev, closes) => {
+  if (adx == null) return { label: "unknown", note: "ADX unavailable", mode: "trend" };
+  const t = closes.slice(-4);
+  const up = t.length === 4 && t[3] > t[2] && t[2] > t[1];
+  const down = t.length === 4 && t[3] < t[2] && t[2] < t[1];
+  const rising = adxPrev != null && adx > adxPrev + 1;
+  if (adx > 25 && (up || down)) return { label: "STRONG", note: `ADX ${adx.toFixed(0)} + ${up ? "3 up" : "3 down"} 4h candles — favour trend-following`, mode: "trend" };
+  if (adx < 20 && rising) return { label: "TRANSITIONING", note: `ADX ${adx.toFixed(0)} rising — trend developing, watch for breakout confirmation`, mode: "transition" };
+  if (adx < 20) return { label: "WEAK/RANGING", note: `ADX ${adx.toFixed(0)} — ranging market, favour mean-reversion (bounces not breakouts)`, mode: "range" };
+  return { label: "MODERATE", note: `ADX ${adx.toFixed(0)} — developing`, mode: rising ? "transition" : "trend" };
+};
+
+const priceStructure = (highs, lows) => {
+  const sh = [], sl = [];
+  for (let i = 2; i < highs.length - 2; i++) {
+    if (highs[i] > highs[i - 1] && highs[i] > highs[i - 2] && highs[i] > highs[i + 1] && highs[i] > highs[i + 2]) sh.push(highs[i]);
+    if (lows[i] < lows[i - 1] && lows[i] < lows[i - 2] && lows[i] < lows[i + 1] && lows[i] < lows[i + 2]) sl.push(lows[i]);
+  }
+  const lastH = sh.slice(-3), lastL = sl.slice(-3);
+  const asc = a => a.length >= 2 && a.every((v, i) => i === 0 || v > a[i - 1]);
+  const desc = a => a.length >= 2 && a.every((v, i) => i === 0 || v < a[i - 1]);
+  let structure = "ranging (flat highs/lows)";
+  if (asc(lastH) && asc(lastL)) structure = "UPTREND — higher highs + higher lows";
+  else if (desc(lastH) && desc(lastL)) structure = "DOWNTREND — lower highs + lower lows";
+  else if (asc(lastH)) structure = "higher highs, mixed lows";
+  else if (desc(lastL)) structure = "lower lows, mixed highs";
+  return { highs: lastH, lows: lastL, structure };
+};
+
+const macdHistSeries = closes => {
+  const e12 = calcEMA(closes, 12), e26 = calcEMA(closes, 26);
+  const valid = e12.map((v, i) => ({ v: (v != null && e26[i] != null) ? v - e26[i] : null, i })).filter(x => x.v != null);
+  const sigArr = calcEMA(valid.map(x => x.v), 9);
+  const hist = {};
+  for (let k = 0; k < valid.length; k++) if (sigArr[k] != null) hist[valid[k].i] = valid[k].v - sigArr[k];
+  return hist;
+};
+const detectDivergence = (highs, lows, closes) => {
+  const hist = macdHistSeries(closes);
+  const peaks = [], troughs = [];
+  for (let i = 2; i < closes.length - 2; i++) {
+    if (highs[i] > highs[i - 1] && highs[i] > highs[i - 2] && highs[i] > highs[i + 1] && highs[i] > highs[i + 2]) peaks.push(i);
+    if (lows[i] < lows[i - 1] && lows[i] < lows[i - 2] && lows[i] < lows[i + 1] && lows[i] < lows[i + 2]) troughs.push(i);
+  }
+  const p = peaks.slice(-2), t = troughs.slice(-2);
+  if (p.length === 2 && hist[p[0]] != null && hist[p[1]] != null && highs[p[1]] > highs[p[0]] && hist[p[1]] < hist[p[0]])
+    return { type: "bearish", note: "price higher-high but MACD lower-high — weakening uptrend, SHORT bias" };
+  if (t.length === 2 && hist[t[0]] != null && hist[t[1]] != null && lows[t[1]] < lows[t[0]] && hist[t[1]] > hist[t[0]])
+    return { type: "bullish", note: "price lower-low but MACD higher-low — weakening downtrend, LONG bias" };
+  return { type: "none", note: "no clear divergence" };
+};
+
+const sessionBias = (c1h, price) => {
+  const n = Math.min(8, c1h.highs.length);
+  const hi = Math.max(...c1h.highs.slice(-n)), lo = Math.min(...c1h.lows.slice(-n));
+  if (hi === lo) return { bias: "neutral", pct: 50 };
+  const pct = Math.round((price - lo) / (hi - lo) * 100);
+  return { bias: pct >= 60 ? "bullish" : pct <= 40 ? "bearish" : "neutral", pct, hi, lo };
+};
+
 // ─── master aggregator ───────────────────────────────────────────────────────
 // Each c* = { opens, highs, lows, closes, volumes }
-export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h }) => {
+export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevClose }) => {
   // c1h and c4h are required (master timeframes); c15 is optional (entry timing).
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
   const adxR = calcADX(c4h.highs, c4h.lows, c4h.closes, 14);
@@ -211,8 +272,18 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h }) => 
   const keyPattern = allPats.find(p => (p.dir === "bullish" && nearSup) || (p.dir === "bearish" && nearRes)) || allPats[0] || null;
 
   const mtfAligned = t4 === t1 && t1 !== "FLAT";
+  const mtfConflict = t4 !== "FLAT" && t1 !== "FLAT" && t4 !== t1;                 // 4h vs 1h disagree
+  const allDisagree = t4 !== t1 && t1 !== t15 && t4 !== t15;                        // all 3 different = chop
   const overall = t4 === t1 ? t4 : "WAIT";
   const sigOf = t => t === "BULL" ? "LONG" : t === "BEAR" ? "SHORT" : "—";
+
+  // trend-context (weighted inputs for the AI)
+  const adxPrevR = calcADX(c4h.highs.slice(0, -3), c4h.lows.slice(0, -3), c4h.closes.slice(0, -3), 14);
+  const strength = trendStrength(adx, adxPrevR ? adxPrevR.adx : null, c4h.closes);
+  const structure = priceStructure(c4h.highs.slice(-60), c4h.lows.slice(-60));
+  const divergence = detectDivergence(c4h.highs.slice(-40), c4h.lows.slice(-40), c4h.closes.slice(-40));
+  const sBias = sessionBias(c1h, price);
+  const pdBias = prevClose == null ? { bias: "unknown", prevClose: null } : { bias: price > prevClose ? "bullish" : price < prevClose ? "bearish" : "neutral", prevClose };
 
   const mtf = {
     rows: [
@@ -240,6 +311,8 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h }) => 
     fib, sr, pull, vol4, vol1, vol15, volDiv,
     pat4, pat1, pat15, patternBias, keyPattern, nearRes, nearSup,
     mtf, entries, atr4h,
+    mtfConflict, allDisagree,
+    strength, structure, divergence, sessionBias: sBias, prevDayBias: pdBias,
   };
 };
 
@@ -253,8 +326,9 @@ export const signalQuality = (parsed, ta) => {
   if (ta.mtf.aligned) bonus += 10;
   if (ta.vol4 && ta.vol4.cls === "HIGH") bonus += 5;
   if (ta.adx != null && ta.adx > 25) bonus += 5;
+  if (ta.divergence && ta.divergence.type !== "none") bonus += 5; // momentum divergence confirmation
   const score = Math.min(100, pts + bonus);
-  const label = score < 50 ? "WAIT" : score < 70 ? "MEDIUM" : score < 85 ? "HIGH" : "VERY HIGH";
+  const label = score < 35 ? "WAIT" : score < 50 ? "LOW" : score < 70 ? "MEDIUM" : score < 85 ? "HIGH" : "VERY HIGH";
   return { score, label };
 };
 
@@ -295,9 +369,18 @@ export const taPromptBlock = (ta, f) => {
   const res = ta.sr.resistance.map(r => `${f(r.level)}(${r.touches}x)`).join(", ") || "none";
   const sup = ta.sr.support.map(r => `${f(r.level)}(${r.touches}x)`).join(", ") || "none";
   const pats = (lbl, arr) => arr.length ? `${lbl}: ${arr.map(p => `${p.name}[${p.dir}]`).join(", ")}` : `${lbl}: none`;
-  return `MULTI-TIMEFRAME (computed locally — MASTER RULE: never trade against 4h; 1h must confirm 4h; if 4h≠1h → WAIT)
-  4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : " (NOT aligned)"}
+  const st = ta.structure, sb = ta.sessionBias, pd = ta.prevDayBias;
+  return `MULTI-TIMEFRAME (computed locally — prefer trading WITH the 4h trend; if 4h≠1h cap confidence at LOW, do NOT auto-WAIT; only WAIT if all three timeframes disagree)
+  4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
   ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (${"<20 weak, 20-25 developing, >25 strong"})
+
+TREND CONTEXT (weighted inputs — improve direction accuracy, not hard rules)
+  Trend strength: ${ta.strength.label} — ${ta.strength.note}
+  Price structure (4h): ${st.structure} | recent highs ${st.highs.map(f).join(", ") || "n/a"} | recent lows ${st.lows.map(f).join(", ") || "n/a"}
+  Momentum divergence: ${ta.divergence.type.toUpperCase()} — ${ta.divergence.note}
+  Session bias: ${sb.bias} (price ${sb.pct}% up the session range)
+  Previous-day bias: ${pd.bias}${pd.prevClose != null ? ` (prev close ${f(pd.prevClose)})` : ""}
+  → In a STRONG trend weight trend-following; in a RANGING market weight mean-reversion (fade extremes); when TRANSITIONING wait for breakout confirmation.
 
 CANDLE PATTERNS (last 3 candles)
   ${pats("4h", ta.pat4)}

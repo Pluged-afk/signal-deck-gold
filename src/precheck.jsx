@@ -52,34 +52,21 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
   const sessOk = goodSession(id, h);
   const sess = { name: "Session", ok: sessOk, detail: sessOk ? `${config.session().label} — good window` : `Off-peak (${String(h).padStart(2, "0")}:00 UTC). Best ${id === "btc" ? "13:00–21:00" : "08:00–20:00"} UTC` };
 
-  // 2 — price near a stored key level
-  let price2;
-  if (!price) price2 = { name: "Price location", ok: true, detail: "price unavailable — allowed", price };
-  else if (!pc.levels?.length) price2 = { name: "Price location", ok: true, detail: staleReset ? "stored levels expired (>24h) — reset, allowed" : "no stored levels yet (first run) — allowed", price };
-  else {
-    let best = null;
-    pc.levels.forEach(l => { const d = Math.abs(price - l) / price; if (best === null || d < best.d) best = { l, d, abs: Math.abs(price - l) }; });
-    const ok = best.d <= 0.008;
-    price2 = {
-      name: "Price location", ok, price,
-      detail: ok ? `near ${fmt(best.l.toFixed(dp(price)))} (${(best.d * 100).toFixed(2)}% away)`
-        : `nearest ${best.l.toFixed(dp(price))} · ${best.abs.toFixed(dp(price))} away (${(best.d * 100).toFixed(2)}%), need ≤0.8%`,
-      best,
-    };
-  }
+  // (price-location check removed — it blocked too many valid moving-between-levels setups)
 
-  // 3 — binary event within 72h → block the paid signal entirely (cost guard)
-  const BLOCK_H = 72;
+  // 2 — binary event within 24h → block; 24–72h → caution (still runs)
+  const BLOCK_H = 24, CAUTION_H = 72;
   const soon = (events || []).find(e => e.date && (e.date - now) > 0 && (e.date - now) <= BLOCK_H * 3600000);
-  const evt = { name: "Binary event", ok: !soon, detail: soon ? `${soon.label} ${soon.in} (${soon.ds} · ${soon.tEgy} EGY) — no paid signal within 72h` : "none within 72h" };
+  const caution = soon ? null : (events || []).find(e => e.date && (e.date - now) > BLOCK_H * 3600000 && (e.date - now) <= CAUTION_H * 3600000);
+  const evt = { name: "Binary event", ok: !soon, detail: soon ? `${soon.label} ${soon.in} (${soon.ds} · ${soon.tEgy} EGY) — no paid signal within 24h` : caution ? `${caution.label} ${caution.in} — trade with caution, reduce size` : "none within 24h" };
 
-  // 4 — minimum 45 min since last refresh
+  // 3 — minimum interval since last refresh
   const since = pc.lastRefresh ? now - pc.lastRefresh : Infinity;
   const timeOk = since >= MIN_INTERVAL_MIN * 60000;
   const time = { name: "Min interval", ok: timeOk, detail: timeOk ? (pc.lastRefresh ? `${Math.round(since / 60000)} min since last refresh` : "first run") : `only ${Math.round(since / 60000)} min since last — wait ${MIN_INTERVAL_MIN - Math.round(since / 60000)} min` };
 
-  const checks = [sess, price2, evt, time];
-  return { pass: checks.every(c => c.ok), checks, price, src, saved: COST_PER_CALL, binary: soon || null, levels: pc.levels || [] };
+  const checks = [sess, evt, time];
+  return { pass: checks.every(c => c.ok), checks, price, src, saved: COST_PER_CALL, binary: soon || null, caution: caution || null, levels: pc.levels || [] };
 };
 
 // One-line summary for the status row under the refresh button.

@@ -137,10 +137,10 @@ YOUR JOB (web search only for these):
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/NFP/PCE) within 24h → WAIT, no exceptions
-- ≥6 of 10 confirm same direction → LONG or SHORT. <6 = WAIT
-- MULTI-TIMEFRAME MASTER RULE: never trade against the 4h trend. 1h must confirm 4h. If 4h and 1h conflict → WAIT, no exceptions. 15m is for entry timing only.
+- ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
+- MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
-- SIGNAL QUALITY: <50 = WAIT regardless of everything else; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH (rare).
+- SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH.
 - Three-timeframe MACD alignment is a strong standalone signal — weight it heavily
 - DXY and yield conflict → confidence capped at MEDIUM
 - Low volume breakout → confidence capped at MEDIUM
@@ -188,7 +188,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         // round numbers within $30 (gold respects these strongly)
         const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
         td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, bullMacd:bull, bearMacd:3-bull };
-        ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+        ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
@@ -376,10 +376,10 @@ KEY EUR/USD LOGIC:
 
 SIGNAL RULES:
 - Binary event (ECB/FOMC/US CPI/NFP/Eurozone CPI) within 24h → WAIT.
-- ≥6 of 10 confirm same direction → LONG or SHORT. <6 = WAIT
-- MULTI-TIMEFRAME MASTER RULE: never trade against the 4h trend. 1h must confirm 4h. If 4h and 1h conflict → WAIT, no exceptions. 15m is for entry timing only.
+- ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
+- MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
-- SIGNAL QUALITY: <50 = WAIT regardless of everything else; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH (rare)..
+- SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH..
 - DXY step conflicting with MACD/price → cap confidence at MEDIUM.
 - Asian session with no catalyst → cap confidence at MEDIUM.
 - Stop: use the ATR-based pip value provided. T1 min 1.5× ATR, T2 min 2.5× ATR. R:R <1:2 → WAIT.
@@ -428,7 +428,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         if(c1h.times){ const rows=c1h.times.map((t,i)=>({hr:+(t.slice(11,13)),day:t.slice(0,10),h:c1h.highs[i],l:c1h.lows[i]})).filter(r=>r.hr>=0&&r.hr<8);
           if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
         td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow };
-        ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+        ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
@@ -599,10 +599,10 @@ KEY BTC LOGIC:
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/PCE) within 24h → WAIT (never hold BTC through macro).
-- ≥6 of 10 confirm same direction → LONG or SHORT. <6 = WAIT
-- MULTI-TIMEFRAME MASTER RULE: never trade against the 4h trend. 1h must confirm 4h. If 4h and 1h conflict → WAIT, no exceptions. 15m is for entry timing only.
+- ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
+- MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
-- SIGNAL QUALITY: <50 = WAIT regardless of everything else; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH (rare)..
+- SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH..
 - Funding >+0.1% + price at resistance = high-probability SHORT.
 - Stop: use the ATR-based value provided (do not widen). T1 min 1.5× ATR, T2 min 2.5× ATR.
 - Minimum R:R 1:2.5 for BTC. R:R <1:2.5 → WAIT.
@@ -649,7 +649,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const upW=c4h.highs[li]-Math.max(c4h.opens[li],c4h.closes[li]), loW=Math.min(c4h.opens[li],c4h.closes[li])-c4h.lows[li];
       const whaleWick=(upW>3*body||loW>3*body)?(upW>loW?"upper (rejection — bearish)":"lower (absorption — bullish)"):null;
       td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick };
-      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h });
+      ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
       addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
 

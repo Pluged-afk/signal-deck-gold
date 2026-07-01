@@ -41,11 +41,12 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     try{
       const { pkg, price, session, meta } = await config.pipeline({ keys, addLog });
 
-      // HARD GATE: if 4h and 1h trends conflict, force WAIT locally — skip the
-      // paid AI call entirely (the MTF master rule, enforced in code not prompt).
+      // HARD GATE (softened): only force WAIT + skip the paid call when ALL THREE
+      // timeframes disagree (genuine chop). A plain 4h/1h conflict now still runs
+      // and returns as a LOW-confidence signal.
       const ta = meta.ta;
-      if(ta && ta.t4!=="FLAT" && ta.t1!=="FLAT" && ta.t4!==ta.t1){
-        addLog(`MTF conflict (4h ${ta.t4} vs 1h ${ta.t1}) — forcing WAIT, skipping AI call`);
+      if(ta && ta.allDisagree){
+        addLog(`All timeframes disagree (4h ${ta.t4} / 1h ${ta.t1} / 15m ${ta.t15}) — forcing WAIT, skipping AI call`);
         const parsed = localWait(ta, price, config.pricePrefix===""?5:2);
         config.merge(parsed, meta);
         parsed.session = session.label; parsed.session_quality = session.quality;
@@ -65,12 +66,18 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       parsed.session_quality = session.quality;
       if(!parsed.price && price) parsed.price = String(price);
 
-      // HARD GATE: computed signal quality <50 forces WAIT (enforced in code).
-      if(parsed._quality && parsed._quality.score < 50 && parsed.action !== "WAIT"){
-        addLog(`Signal quality ${parsed._quality.score}<50 — forcing WAIT`);
-        parsed.action = "WAIT";
-        if(!parsed.wait_type || parsed.wait_type === "none") parsed.wait_type = "low_confidence";
-        if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below 50)`;
+      // Softened gates: quality <35 forces WAIT; 35-50 OR a 4h/1h conflict still
+      // fires but is capped at LOW confidence (trade-at-own-risk).
+      if(parsed.action !== "WAIT"){
+        if(parsed._quality && parsed._quality.score < 35){
+          addLog(`Signal quality ${parsed._quality.score}<35 — forcing WAIT`);
+          parsed.action = "WAIT";
+          if(!parsed.wait_type || parsed.wait_type === "none") parsed.wait_type = "no_setup";
+          if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below 35)`;
+        } else {
+          if((parsed._quality && parsed._quality.score < 50) || ta?.mtfConflict){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; }
+          if(ta?.mtfConflict){ parsed._mtfConflict = true; addLog(`4h/1h conflict (4h ${ta.t4} / 1h ${ta.t1}) — capping confidence at LOW`); }
+        }
       }
 
       addLog("Signal complete.");
@@ -122,6 +129,12 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       </div>
 
       {headerExtra}
+
+      {/* Binary-event caution (24–72h away — informational, does not block) */}
+      {(()=>{const now=Date.now();const ce=events.find(e=>e.date&&e.date-now>24*3600000&&e.date-now<=72*3600000);return ce?(
+        <div style={{...card,background:T.panelBg,border:`1px solid ${T.panelBorder}`,marginBottom:10}}>
+          <span style={{fontSize:11,color:T.accentText,...mono}}>⚠️ Binary event: {ce.label} in {ce.in} ({ce.ds} · {ce.tEgy} EGY) — trade with caution, reduce size</span>
+        </div>):null;})()}
 
       {/* Weekend banner */}
       {wknd&&(
@@ -250,6 +263,14 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
             </div>
           );})()}
         </div>
+
+        {/* LOW-confidence "trade at your own risk" banner */}
+        {sig.action!=="WAIT" && sig.confidence==="LOW" && (
+          <div style={{...card,background:"#1f1206",border:"1px solid #7c2d12",marginBottom:10}}>
+            <p style={{fontSize:12,fontWeight:700,color:"#fb923c",margin:"0 0 3px"}}>⚠️ LOW CONFIDENCE — trade at your own risk</p>
+            <p style={{fontSize:11,color:"#fdba74",...mono,margin:0,lineHeight:1.5}}>{sig._mtfConflict?"4h/1h conflict — counter-trend risk. ":""}This setup has significant risks. Use minimum lot size (0.01) and a tighter stop. Consider paper trading this signal.</p>
+          </div>
+        )}
 
         {/* WAIT → watch-for card replaces the entry plan; LONG/SHORT → invalidation card */}
         {sig.action==="WAIT" && <WaitCard sig={sig} pricePrefix={config.pricePrefix}/>}

@@ -241,6 +241,14 @@ export default function ScalpEngine({ onBack, toggle }) {
             </div>
           </div>
 
+          {/* LOW-confidence "trade at your own risk" banner */}
+          {sig.action !== "WAIT" && sig.confidence === "LOW" && (
+            <div style={{ ...card, background: "#1f1206", border: "1px solid #7c2d12", marginBottom: 10 }}>
+              <p style={{ fontSize: 12, fontWeight: 700, color: "#fb923c", margin: "0 0 3px" }}>⚠️ LOW CONFIDENCE — trade at your own risk</p>
+              <p style={{ fontSize: 11, color: "#fdba74", ...mono, margin: 0, lineHeight: 1.5 }}>{s.capLowConf ? "High noise score. " : ""}Use minimum lot size (0.01) and a tighter stop. Consider paper trading this scalp.</p>
+            </div>
+          )}
+
           {/* Entry/levels with €0.01 + €0.05 */}
           {sig.action !== "WAIT" && (
             <div style={{ ...card, marginBottom: 10 }}>
