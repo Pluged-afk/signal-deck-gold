@@ -7,7 +7,7 @@ import {
   mono, card, lbl, fmt, p2, p5,
   calcMACD, calcRSI, calcATR, calcSMA, calcVWAP, calcVolRatio, calcEMAlast, calcPivots,
   getFxSession, getCryptoSession,
-  f1, f2, f3, na, rsiLbl, volLbl, tdFetch,
+  f1, f2, f3, na, rsiLbl, rsiLblGold, volLbl, tdFetch,
 } from "./shared";
 import { analyzeTimeframes, signalQuality, taPromptBlock } from "./ta";
 
@@ -39,6 +39,7 @@ function mergeTA(p, ta, fnum) {
   if ((!p.support || p.support === "") && ta.sr.support[0]) p.support = fnum(ta.sr.support[0].level);
   if ((!p.resistance || p.resistance === "") && ta.sr.resistance[0]) p.resistance = fnum(ta.sr.resistance[0].level);
   if (!p.entry_type && ta.entries) p.entry_type = ta.entries.recommended;
+  if (ta.bb) { p.bb_upper = fnum(ta.bb.upper); p.bb_lower = fnum(ta.bb.lower); p.bb_regime = ta.bb.regime; }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -78,7 +79,7 @@ const GOLD = {
   scRows:[
     { key:"price",     label:"1. Price & VWAP" },
     { key:"macd",      label:"2. MACD 1h/4h/Daily" },
-    { key:"rsi_ma",    label:"3. RSI + 200MA" },
+    { key:"rsi_ma",    label:"3. RSI 80/20 + 200MA" },
     { key:"volume",    label:"4. Volume Confirmation" },
     { key:"dxy_yield", label:"5. DXY + Real Yield" },
     { key:"cot",       label:"6. COT Positioning" },
@@ -94,10 +95,14 @@ const GOLD = {
   levels:(s)=>[
     { name:"24h High",   val:`$${fmt(s.high_24h)}` },
     { name:"24h Low",    val:`$${fmt(s.low_24h)}` },
+    { name:"PDH",        val:`$${fmt(s.pdh)}` },
+    { name:"PDL",        val:`$${fmt(s.pdl)}` },
     { name:"VWAP",       val:`$${fmt(s.vwap)}` },
     { name:"Support",    val:`$${fmt(s.support)}` },
     { name:"Resistance", val:`$${fmt(s.resistance)}` },
     { name:"200-Day MA", val:`$${fmt(s.ma200)}` },
+    { name:"BB Upper (4h)", val:`$${fmt(s.bb_upper)}` },
+    { name:"BB Lower (4h)", val:`$${fmt(s.bb_lower)}` },
   ],
   extraPanels:(s)=>(
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -128,7 +133,7 @@ YOUR JOB (web search only for these):
 8-STEP SCORECARD RULES:
 1. PRICE & VWAP: Upper/lower third of 24h range AND above/below VWAP → same direction = PASS.
 2. MACD MULTI-TF: 1h+4h+Daily all above signal = PASS LONG. All below = PASS SHORT. 2/3 = NEUTRAL. 1/3 or 0/3 = FAIL.
-3. RSI + 200MA: RSI 50-70 + price above 200MA = PASS LONG. RSI 30-50 + below 200MA = PASS SHORT. Extremes (>70 or <30) = NEUTRAL for entry.
+3. RSI + 200MA (GOLD-CALIBRATED 80/20): RSI 50-80 + price above 200MA = PASS LONG. RSI 20-50 + below 200MA = PASS SHORT. Extremes (>80 or <20) = NEUTRAL for entry. Gold runs hotter than forex — do NOT treat 70/30 as extreme; only 80/20 counts as overbought/oversold for gold.
 4. VOLUME: Ratio >1.5x avg = PASS (confirms). 0.8-1.5x = NEUTRAL. <0.8x = FAIL (weak move).
 5. DXY + REAL YIELD: Both falling = PASS LONG. Both rising = PASS SHORT. Conflict = NEUTRAL.
 6. COT: Net MM <100k = room for longs = PASS LONG. Net >200k = crowded = FAIL LONG/PASS SHORT. 100-200k = NEUTRAL.
@@ -187,7 +192,22 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
         // round numbers within $30 (gold respects these strongly)
         const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
-        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, bullMacd:bull, bearMacd:3-bull };
+        // PDH/PDL (yesterday's completed daily candle) + liquidity-sweep detection
+        // (same pattern as EUR's Asian-range sweep, applied to gold's PDH/PDL)
+        const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
+        const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
+        let sweep=null, nearPD=null;
+        if(pdh!=null&&pdl!=null){
+          for(let i=Math.max(0,c1h.closes.length-3);i<c1h.closes.length;i++){
+            if(c1h.highs[i]>pdh&&c1h.closes[i]<pdh) sweep={level:pdh,side:"PDH",note:"bearish reversal setup — watch SHORT"};
+            else if(c1h.lows[i]<pdl&&c1h.closes[i]>pdl) sweep={level:pdl,side:"PDL",note:"bullish reversal setup — watch LONG"};
+          }
+          if(!sweep){
+            if(Math.abs(spot.price-pdh)<=5) nearPD={level:pdh,side:"PDH"};
+            else if(Math.abs(spot.price-pdl)<=5) nearPD={level:pdl,side:"PDL"};
+          }
+        }
+        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, pdh,pdl,sweep,nearPD, bullMacd:bull, bearMacd:3-bull };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
@@ -232,7 +252,8 @@ MACD — THREE TIMEFRAMES
   Daily: line=${f3(td?.macdD?.macd)} hist=${f3(td?.macdD?.histogram)} | ${td?.macdD?.aboveSignal?"ABOVE":"BELOW"} signal
   Alignment: ${td?`${td.bullMacd}/3 bullish, ${td.bearMacd}/3 bearish${td.bullMacd===3?" — ALL BULLISH (strong)":td.bearMacd===3?" — ALL BEARISH (strong)":""}`:"unavailable"}
 
-RSI (14)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)} | Daily:${f1(td?.rsiD)}${rsiLbl(td?.rsiD)}
+RSI (14, GOLD BANDS 80/20)  1h:${f1(td?.rsi1h)}${rsiLblGold(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLblGold(td?.rsi4h)} | Daily:${f1(td?.rsiD)}${rsiLblGold(td?.rsiD)}
+  (gold-calibrated: >80 overbought, <20 oversold — standard 70/30 flags gold prematurely)
   200MA: $${f2(td?.ma200)} → price ${td?.ma200?(spot.price>td.ma200?"ABOVE (bull bias)":"BELOW (bear bias)"):"unknown"}
 
 VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h.ratio):"n/a"} | 4h:${td?.vol4h?td.vol4h.ratio.toFixed(2)+"x"+volLbl(td.vol4h.ratio):"n/a"}
@@ -244,6 +265,9 @@ MACRO — FRED  10Y Nominal:${na(macro.nominal)}% | Real Yield:${na(macro.realYi
 COT — CFTC Managed Money  Net:${cot?.netMM?.toLocaleString()??"n/a"} | WeekΔ:${cot?.weekChange?.toLocaleString()??"n/a"} | ${na(cot?.sentiment)} (>200k crowded long=bearish, <50k crowded short=bullish)
 
 GOLD CONTEXT  Daily ATR:$${f2(td?.dailyAtr)} (${td?.dailyAtr>40?"HIGH vol — widen stops":td?.dailyAtr<20?"LOW vol — tight ranges":"normal"}) | Round numbers near price: ${td?.rounds?.length?td.rounds.map(r=>"$"+r).join(", "):"none within $30"}
+  PDH: $${f2(td?.pdh)} | PDL: $${f2(td?.pdl)} (previous-day high/low — universally watched liquidity levels)${td?.sweep?`
+  🎯 LIQUIDITY SWEEP DETECTED at $${f2(td.sweep.level)} (${td.sweep.side}) — price spiked through then closed back inside. Classic stop hunt: ${td.sweep.note}.`:td?.nearPD?`
+  ⚠ Price within $5 of ${td.nearPD.side} ($${f2(td.nearPD.level)}) — stop-hunt risk, London false spike likely. Wait for a confirmed break or rejection before committing.`:""}
   Session candle note: London open (08-09 UTC) often false-breaks then reverses — wait for the 2nd candle. NY open (13:30-14:30 UTC) is the most reliable candle of the day.
 
 ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no Twelve Data key — score candles & mtf NEUTRAL)"}
@@ -262,6 +286,10 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(macro.dxy!==null)       p.dxy=String(macro.dxy);
     if(cot&&!p.cot_net)        p.cot_net=cot.netMM?.toLocaleString();
     if(cot&&!p.cot_sentiment)  p.cot_sentiment=cot.sentiment;
+    if(td?.pdh!=null) p.pdh=td.pdh.toFixed(2);
+    if(td?.pdl!=null) p.pdl=td.pdl.toFixed(2);
+    p._sweepNote = td?.sweep ? `🎯 LIQUIDITY SWEEP DETECTED at $${td.sweep.level.toFixed(2)} (${td.sweep.side}) — classic stop hunt. Reversal setup forming: ${td.sweep.note}.`
+      : td?.nearPD ? `⚠️ Price near ${td.nearPD.side} ($${td.nearPD.level.toFixed(2)}) — stop hunt risk. London false spike likely. Wait for confirmed break or rejection.` : null;
     p._sources=[...(ta?["Real OHLCV"]:[]),...((macro.dxy!=null||macro.realYield!=null)?["FRED"]:[]),...(cot?["COT"]:[])];
     mergeTA(p, ta, v=>v.toFixed(2));
   },
@@ -322,6 +350,8 @@ const EUR = {
   levels:(s)=>[
     { name:"24h High",   val:fmt(s.high_24h) },
     { name:"24h Low",    val:fmt(s.low_24h) },
+    { name:"PDH",        val:fmt(s.pdh) },
+    { name:"PDL",        val:fmt(s.pdl) },
     { name:"VWAP",       val:fmt(s.vwap) },
     { name:"50 EMA (4h)",  val:fmt(s.ema50) },
     { name:"200 EMA (4h)", val:fmt(s.ema200) },
@@ -427,7 +457,9 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         let asianHigh=null, asianLow=null;
         if(c1h.times){ const rows=c1h.times.map((t,i)=>({hr:+(t.slice(11,13)),day:t.slice(0,10),h:c1h.highs[i],l:c1h.lows[i]})).filter(r=>r.hr>=0&&r.hr<8);
           if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
-        td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow };
+        const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
+        const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
+        td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow, pdh,pdl };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
@@ -461,6 +493,7 @@ MACD  1h: line=${ff(td?.macd1h?.macd)} ${td?.macd1h?.aboveSignal?"ABOVE":"BELOW"
 RSI (14)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)}
 
 PIVOTS (from prior daily candle)  P:${ff(td?.pivots?.P)} | R1:${ff(td?.pivots?.R1)} R2:${ff(td?.pivots?.R2)} | S1:${ff(td?.pivots?.S1)} S2:${ff(td?.pivots?.S2)}
+  PDH:${ff(td?.pdh)} | PDL:${ff(td?.pdl)} (previous-day high/low — watched liquidity levels)
 
 ATR & STOP (4h)  ATR:${ff(td?.atr4h)} | Recommended stop: ${ff(stopAmt)} (${stopPips??"~50"} pips, 1.5x ATR)
 
@@ -486,6 +519,8 @@ ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unava
     if(td?.ema50)            p.ema50=td.ema50.toFixed(5);
     if(td?.ema200)           p.ema200=td.ema200.toFixed(5);
     if(td?.pivots?.P&&!p.pivot) p.pivot=td.pivots.P.toFixed(5);
+    if(td?.pdh!=null) p.pdh=td.pdh.toFixed(5);
+    if(td?.pdl!=null) p.pdl=td.pdl.toFixed(5);
     if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=String(macro.dxy);
     p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
     mergeTA(p, ta, v=>v.toFixed(5));
@@ -546,9 +581,13 @@ const BTC = {
   levels:(s)=>[
     { name:"24h High",   val:`$${fmt(s.high_24h)}` },
     { name:"24h Low",    val:`$${fmt(s.low_24h)}` },
+    { name:"PDH",        val:`$${fmt(s.pdh)}` },
+    { name:"PDL",        val:`$${fmt(s.pdl)}` },
     { name:"200 SMA (D)",val:`$${fmt(s.sma200)}` },
     { name:"Support",    val:`$${fmt(s.support)}` },
     { name:"Resistance", val:`$${fmt(s.resistance)}` },
+    { name:"BB Upper (4h)", val:`$${fmt(s.bb_upper)}` },
+    { name:"BB Lower (4h)", val:`$${fmt(s.bb_lower)}` },
   ],
   extraPanels:(s)=>(
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -648,7 +687,9 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const li=c4h.closes.length-1; const body=Math.abs(c4h.closes[li]-c4h.opens[li])||1e-9;
       const upW=c4h.highs[li]-Math.max(c4h.opens[li],c4h.closes[li]), loW=Math.min(c4h.opens[li],c4h.closes[li])-c4h.lows[li];
       const whaleWick=(upW>3*body||loW>3*body)?(upW>loW?"upper (rejection — bearish)":"lower (absorption — bullish)"):null;
-      td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick };
+      const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
+      const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
+      td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick, pdh,pdl };
       ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
       addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
@@ -672,7 +713,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
 PRICE
   BTC/USD Spot: $${spot.price} (${spot.src})${chg!=null?` | 24h change ${chg>0?"+":""}${chg}%`:""}
-  24h High: $${na(h24)} | 24h Low: $${na(l24)}
+  24h High: $${na(h24)} | 24h Low: $${na(l24)} | PDH: $${f2(td?.pdh)} | PDL: $${f2(td?.pdl)}
   Session: ${session.label}
 
 MACD  1h: line=${f1(td?.macd1h?.macd)} ${td?.macd1h?.aboveSignal?"ABOVE":"BELOW"} signal | 4h: line=${f1(td?.macd4h?.macd)} ${td?.macd4h?.aboveSignal?"ABOVE":"BELOW"} signal ${td?.macd4h?.expanding?"(expanding)":"(contracting)"}
@@ -703,6 +744,8 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(h24!=null&&!p.high_24h) p.high_24h=String(h24);
     if(l24!=null&&!p.low_24h)  p.low_24h=String(l24);
     if(td?.sma200)             p.sma200=td.sma200.toFixed(2);
+    if(td?.pdh!=null)          p.pdh=td.pdh.toFixed(2);
+    if(td?.pdl!=null)          p.pdl=td.pdl.toFixed(2);
     if(funding!=null)          p.funding_rate=`${funding.toFixed(4)}%`;
     if(oi!=null)               p.open_interest=`${Math.round(oi).toLocaleString()} BTC`;
     if(oiTrend)                p.oi_trend=oiTrend;

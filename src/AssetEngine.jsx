@@ -264,6 +264,13 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           );})()}
         </div>
 
+        {/* Gold PDH/PDL stop-hunt / liquidity-sweep alert */}
+        {sig._sweepNote && (
+          <div style={{...card,background:"#1c1408",border:"1px solid #b45309",marginBottom:10}}>
+            <p style={{fontSize:12,color:"#fbbf24",...mono,margin:0,lineHeight:1.5}}>{sig._sweepNote}</p>
+          </div>
+        )}
+
         {/* LOW-confidence "trade at your own risk" banner */}
         {sig.action!=="WAIT" && sig.confidence==="LOW" && (
           <div style={{...card,background:"#1f1206",border:"1px solid #7c2d12",marginBottom:10}}>

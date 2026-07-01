@@ -18,6 +18,8 @@ export const f2  = v => (v||v===0) ? v.toFixed(2) : "n/a";
 export const f1  = v => (v||v===0) ? v.toFixed(1) : "n/a";
 export const na  = v => (v??"unavailable");
 export const rsiLbl = v => !v?"":(v>70?" (OVERBOUGHT)":v<30?" (OVERSOLD)":" (neutral)");
+// Gold runs hotter than forex — 70/30 flags extremes prematurely. Gold uses 80/20.
+export const rsiLblGold = v => !v?"":(v>80?" (OVERBOUGHT)":v<20?" (OVERSOLD)":" (neutral)");
 export const volLbl = r => !r?"":(r>1.5?" HIGH — confirms":r<0.8?" LOW — weak":" normal");
 
 // ─── Status colors ──────────────────────────────────────────────────────────

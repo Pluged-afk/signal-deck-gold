@@ -11,6 +11,22 @@
 //   • signal-quality score 0–100
 // ═══════════════════════════════════════════════════════════════════════════
 import { calcEMA, calcEMAlast, calcATR } from "./shared";
+import { bollinger } from "./scalp";
+
+// Bollinger regime on 4h (20, 2SD) — reuses the scalp BB math. Compares the
+// current band width to its recent average to classify squeeze vs trending.
+const bb4hRegime = closes => {
+  const cur = bollinger(closes, 20, 2);
+  if (!cur) return null;
+  const widths = [];
+  for (let i = Math.max(21, closes.length - 30); i <= closes.length; i++) {
+    const b = bollinger(closes.slice(0, i), 20, 2);
+    if (b) widths.push(b.width);
+  }
+  const avgWidth = widths.reduce((a, b) => a + b, 0) / (widths.length || 1);
+  const squeeze = cur.width < 0.8 * avgWidth, wide = cur.width > 1.25 * avgWidth;
+  return { ...cur, avgWidth, squeeze, wide, regime: squeeze ? "SQUEEZE — breakout coming" : wide ? "WIDE — trending" : "normal" };
+};
 
 // ─── candle helpers ──────────────────────────────────────────────────────────
 export const candleStats = (o, h, l, c) => {
@@ -257,6 +273,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
   const pull = analyzePullback(c1h.highs, c1h.lows, c1h.closes);
   const vol4 = volumeState(c4h.volumes), vol1 = volumeState(c1h.volumes), vol15 = c15 ? volumeState(c15.volumes) : null;
   const volDiv = volDivergence(c4h.closes, c4h.volumes);
+  const bb = bb4hRegime(c4h.closes);
 
   const nearRes = sr.resistance[0] && Math.abs(price - sr.resistance[0].level) / price < 0.005;
   const nearSup = sr.support[0] && Math.abs(price - sr.support[0].level) / price < 0.005;
@@ -310,7 +327,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
     t4, t1, t15, adx, adxClass: adxClass(adx),
     fib, sr, pull, vol4, vol1, vol15, volDiv,
     pat4, pat1, pat15, patternBias, keyPattern, nearRes, nearSup,
-    mtf, entries, atr4h,
+    mtf, entries, atr4h, bb,
     mtfConflict, allDisagree,
     strength, structure, divergence, sessionBias: sBias, prevDayBias: pdBias,
   };
@@ -388,6 +405,9 @@ CANDLE PATTERNS (last 3 candles)
   pattern bias: ${ta.patternBias}${ta.keyPattern ? ` | KEY: ${ta.keyPattern.name} on ${ta.keyPattern.tf} at ${ta.nearRes ? "resistance" : ta.nearSup ? "support" : "level"}` : ""}
 
 VOLUME (current vs 20-avg)  4h:${ta.vol4 ? ta.vol4.cls + " " + ta.vol4.ratio.toFixed(2) + "x" : "n/a"} | 1h:${ta.vol1 ? ta.vol1.cls + " " + ta.vol1.ratio.toFixed(2) + "x" : "n/a"}${ta.volDiv ? `\n  ⚠ ${ta.volDiv}` : ""}
+${ta.bb ? `
+BOLLINGER (4h, 20/2)  upper:${f(ta.bb.upper)} | mid:${f(ta.bb.mid)} | lower:${f(ta.bb.lower)} | width ${ta.bb.width.toFixed(2)}% vs ${ta.bb.avgWidth.toFixed(2)}% avg → ${ta.bb.regime}
+  price at ${ta.bb.position} band. Rules: SQUEEZE = breakout imminent, wait for direction; at UPPER + bearish signal = strong SHORT confirmation; at LOWER + bullish signal = strong LONG confirmation; WIDE bands = trending — trust trend-following over mean-reversion.` : ""}
 
 FIBONACCI (from 4h swing, last 50)  High:${f(ta.fib.high)} Low:${f(ta.fib.low)}
   23.6%:${f(fl[0.236])} | 38.2%:${f(fl[0.382])}★ | 50%:${f(fl[0.5])} | 61.8%:${f(fl[0.618])}★ | 78.6%:${f(fl[0.786])}
