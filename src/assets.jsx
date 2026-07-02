@@ -142,7 +142,7 @@ YOUR JOB (web search only for these):
 8. NEWS: Confirmed bullish catalyst = PASS. Bearish = FAIL. Unclear = NEUTRAL.
 
 SIGNAL RULES:
-- Binary event (FOMC/CPI/NFP/PCE) within 24h → WAIT, no exceptions
+- Binary event (FOMC/CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. An event that has ALREADY RELEASED does NOT force WAIT: once 30+ minutes have passed since release, trade the post-event trend normally (use the POST-NFP guidance when provided). Never output wait_type binary_event for a past release.
 - ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
@@ -170,12 +170,20 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
 
     addLog("Fetching spot price...");
-    let spot=null;
+    let spot=null, sqMid=null;
+    // Swissquote fetched in parallel as a live cross-check — TD's free tier can
+    // lag badly right after news, and a stale spot poisons every downstream calc
+    const sqP=fetch("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD").then(r=>r.ok?r.json():null).catch(()=>null);
     if(keys.td) try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>100) spot={price:p2(d.price),src:"Twelve Data"}; }catch(_){}
+    try{ const d=await sqP; const q=d?.[0]?.spreadProfilePrices?.find(x=>x.spreadProfile==="prime"); if(q?.ask&&q?.bid) sqMid=p2((q.ask+q.bid)/2); }catch(_){}
+    if(spot&&sqMid&&Math.abs(spot.price-sqMid)/sqMid>0.004){
+      addLog(`⚠ TD spot ${spot.price} differs ${(Math.abs(spot.price-sqMid)/sqMid*100).toFixed(2)}% from Swissquote live ${sqMid} — using Swissquote (TD stale)`);
+      spot={price:sqMid,src:"Swissquote (TD stale)"};
+    }
+    if(!spot&&sqMid) spot={price:sqMid,src:"Swissquote"};
     if(!spot) try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"); if(r.ok){const d=await r.json(),g=d?.["pax-gold"];if(g?.usd>100) spot={price:p2(g.usd),src:"CoinGecko PAXG"};} }catch(_){}
-    if(!spot) try{ const r=await fetch("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"); if(r.ok){const d=await r.json(),q=d?.[0]?.spreadProfilePrices?.find(x=>x.spreadProfile==="prime");if(q?.ask&&q?.bid) spot={price:p2((q.ask+q.bid)/2),src:"Swissquote"};} }catch(_){}
     if(!spot) throw new Error("Could not fetch gold spot price from any source.");
-    addLog(`Spot: $${spot.price} (${spot.src})`);
+    addLog(`Spot: ${spot.price} (${spot.src})`);
 
     let td=null, ta=null;
     if(keys.td){ try{
@@ -294,7 +302,7 @@ GOLD CONTEXT  Daily ATR:$${f2(td?.dailyAtr)} (${td?.dailyAtr>40?"HIGH vol — wi
 
 ${postNfp?.active?`
 POST-NFP WINDOW (${postNfp.sinceMin} min since the 12:30 UTC release)
-  First 30 min are chaotic — most reliable signal after 13:00 UTC. Stop already tightened 20% (${stopMult}x ATR).
+  ${postNfp.sinceMin>=30?`The 30-min chaos window has PASSED (${postNfp.sinceMin} min since release) — signal NORMALLY now with the tightened stop; do NOT output wait_type binary_event for this released event.`:`First 30 min are chaotic — most reliable signal after 13:00 UTC.`} Stop already tightened 20% (${stopMult}x ATR).
   Move since NFP candle open: ${td?.nfpMove!=null?"$"+td.nfpMove:"n/a"}${td?.nfpLarge?" — LARGE MOVE ALREADY OCCURRED → prefer WAIT/pullback entries":""}
   Volume context: ${td?.vol1h?(td.vol1h.ratio>3?"NFP volume spike — move is institutional, high conviction":td.vol1h.ratio>1.5?"Elevated volume — reliable signal":td.volFading?"Volume normalizing — initial reaction fading, cleaner entry forming":"normal volume"):"n/a"}
   EXTRA TASK (one additional search): search "DXY dollar index NFP reaction today". If DXY up >0.3% set dxy_nfp to "DXY STRENGTHENING post-NFP — bearish gold bias confirmed (+X.X%)". If down >0.3% → "DXY WEAKENING post-NFP — bullish gold bias confirmed (-X.X%)". If flat → "DXY mixed post-NFP — rely on technicals for direction". Include the % change and a one-line analyst take.`:""}
@@ -436,7 +444,7 @@ KEY EUR/USD LOGIC:
 8. NEWS/RISK: risk-on / EUR-supportive = PASS; risk-off / USD-supportive = FAIL; unclear = NEUTRAL.
 
 SIGNAL RULES:
-- Binary event (ECB/FOMC/US CPI/NFP/Eurozone CPI) within 24h → WAIT.
+- Binary event (ECB/FOMC/US CPI/NFP/Eurozone CPI) UPCOMING within the next 24h → WAIT. Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend (use POST-NFP guidance when provided).
 - ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
@@ -553,7 +561,7 @@ EUR/USD CONTEXT  50 EMA (1h):${ff(td?.ema50_1h)} → price ${td?.ema50_1h?(spot.
 
 ${postNfp?.active?`
 POST-NFP WINDOW (${postNfp.sinceMin} min since the 12:30 UTC release)
-  First 30 min are chaotic — most reliable signal after 13:00 UTC. Stop already tightened 20% (${stopMult}x ATR).
+  ${postNfp.sinceMin>=30?`The 30-min chaos window has PASSED (${postNfp.sinceMin} min since release) — signal NORMALLY now with the tightened stop; do NOT output wait_type binary_event for this released event.`:`First 30 min are chaotic — most reliable signal after 13:00 UTC.`} Stop already tightened 20% (${stopMult}x ATR).
   Move since NFP candle open: ${td?.nfpMove!=null?td.nfpMove+" pips":"n/a"}${td?.nfpLarge?" — LARGE MOVE ALREADY OCCURRED → prefer WAIT/pullback entries":""}
   Volume context: ${td?.vol1h?(td.vol1h.ratio>3?"NFP volume spike — move is institutional, high conviction":td.vol1h.ratio>1.5?"Elevated volume — reliable signal":td.volFading?"Volume normalizing — initial reaction fading, cleaner entry forming":"normal volume"):"n/a"}
   EXTRA TASK (one additional search): search "DXY dollar index NFP reaction today". If DXY up >0.3% set dxy_nfp to "DXY STRENGTHENING post-NFP — bearish EUR/USD bias confirmed (+X.X%)". If down >0.3% → "DXY WEAKENING post-NFP — bullish EUR/USD bias confirmed (-X.X%)". If flat → "DXY mixed post-NFP — rely on technicals for direction". Include the % change and a one-line analyst take.`:""}
@@ -691,7 +699,7 @@ KEY BTC LOGIC:
 8. NEWS + F&G: bullish catalyst / extreme fear = PASS; bearish / extreme greed against = FAIL; unclear = NEUTRAL.
 
 SIGNAL RULES:
-- Binary event (FOMC/CPI/PCE) within 24h → WAIT (never hold BTC through macro).
+- Binary event (FOMC/CPI/PCE) UPCOMING within the next 24h → WAIT (never hold BTC through macro). Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
 - ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.

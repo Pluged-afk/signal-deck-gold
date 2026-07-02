@@ -322,7 +322,7 @@ export const WAIT_RULES = `
 You MUST always include a "wait_type" string and a "triggers" object — for LONG and SHORT too, not only WAIT.
 
 wait_type = one of:
-- "binary_event"  : a binary event (FOMC/CPI/NFP/PCE/ECB) is within 24h
+- "binary_event"  : a binary event (FOMC/CPI/NFP/PCE/ECB) is UPCOMING within the next 24h. Already-released events do NOT count once 30+ minutes have passed since release.
 - "low_confidence" : signal quality <50 or the timeframes/indicators conflict
 - "no_setup"      : market ranging, no clear direction
 - "wrong_session" : off-peak / low-volume window
