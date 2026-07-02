@@ -225,7 +225,7 @@ export const tdFetch = async (url, addLog) => {
 // ─── Anthropic multi-turn loop (centralised, with the conversation-history fix)
 // Order is strict: capture text → if end_turn break → if pause_turn echo+continue
 // → else push assistant, then handle tool_use. Never push-then-break.
-export async function runAI({ apiKey, system, userContent, addLog, model="claude-sonnet-4-6", maxTokens=4096, maxSearches }) {
+export async function runAI({ apiKey, system, userContent, addLog, model="claude-sonnet-4-6", maxTokens=6000, maxSearches }) {
   const tools=[{ type:"web_search_20250305", name:"web_search", ...(maxSearches?{ max_uses:maxSearches }:{}) }];
   let history=[{ role:"user", content:userContent }];
   let finalText="";
@@ -237,15 +237,22 @@ export async function runAI({ apiKey, system, userContent, addLog, model="claude
   // signal deterministic (same data → same call). Falls back automatically if the
   // API ever rejects a cache marker.
   const systemBlocks=[{ type:"text", text:system, cache_control:{ type:"ephemeral" } }];
-  const withCacheMark = msgs => msgs.map((m,idx)=>{
-    if(idx!==msgs.length-1) return m;
-    let c=m.content;
-    if(typeof c==="string") c=[{ type:"text", text:c }];
-    else c=c.map(b=>{ const { cache_control, ...rest }=b; return rest; });
-    if(!c.length) return m;
-    c=[...c.slice(0,-1), { ...c[c.length-1], cache_control:{ type:"ephemeral" } }];
-    return { ...m, content:c };
-  });
+  // Only mark USER-role messages (safe, documented); never mark a trailing
+  // assistant message from a pause_turn resume — avoids any prefill+cache edge.
+  const withCacheMark = msgs => {
+    let li=-1;
+    for(let k=msgs.length-1;k>=0;k--) if(msgs[k].role==="user"){ li=k; break; }
+    if(li===-1) return msgs;
+    return msgs.map((m,idx)=>{
+      if(idx!==li) return m;
+      let c=m.content;
+      if(typeof c==="string") c=[{ type:"text", text:c }];
+      else c=c.map(b=>{ const { cache_control, ...rest }=b; return rest; });
+      if(!c.length) return m;
+      c=[...c.slice(0,-1), { ...c[c.length-1], cache_control:{ type:"ephemeral" } }];
+      return { ...m, content:c };
+    });
+  };
   let useCache=true;
 
   for(let i=0;i<10;i++){
@@ -267,6 +274,7 @@ export async function runAI({ apiKey, system, userContent, addLog, model="claude
     const texts=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
     if(texts) finalText=texts;
 
+    if(data.stop_reason==="max_tokens") addLog&&addLog("⚠ hit max_tokens — output may be truncated");
     if(data.stop_reason==="end_turn") break;
 
     if(data.stop_reason==="pause_turn"){
@@ -282,6 +290,27 @@ export async function runAI({ apiKey, system, userContent, addLog, model="claude
       const results=(data.content||[]).filter(b=>b.type==="tool_use").map(b=>({ type:"tool_result", tool_use_id:b.id, content:"Search executed." }));
       if(results.length) history.push({ role:"user", content:results }); else break;
     } else break;
+  }
+
+  // SALVAGE PASS: if the reply isn't valid JSON (prose ending, truncation), make
+  // one cheap tool-free request that converts it into the required JSON instead
+  // of surfacing a parse error. Fresh context — no tool blocks, no cache marks.
+  if(finalText && !parseJSON(finalText)){
+    addLog&&addLog("Reply wasn't valid JSON — running salvage pass...");
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" },
+        body:JSON.stringify({ model, max_tokens:4000, temperature:0, system,
+          messages:[{ role:"user", content:`Your previous analysis reply was not valid JSON. Convert it into the single valid JSON object required by your instructions — preserve every value and conclusion exactly as stated, fill any missing required field sensibly from the text, and output ONLY the JSON with no other text.\n\n--- PREVIOUS REPLY ---\n${finalText.slice(0,12000)}` }] })
+      });
+      if(res.ok){
+        const d=await res.json();
+        const t=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+        if(t&&parseJSON(t)){ addLog&&addLog("Salvage succeeded."); return t; }
+      }
+    }catch(_){}
+    addLog&&addLog("Salvage failed — returning original reply.");
   }
   return finalText;
 }
