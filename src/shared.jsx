@@ -318,6 +318,9 @@ export async function runAI({ apiKey, system, userContent, addLog, model="claude
 // ─── WAIT Alert System — appended to every asset's system prompt ─────────────
 export const WAIT_RULES = `
 
+═══ DATA TRUST — CRITICAL ═══
+The provided spot price is fetched live at request time and cross-checked against an institutional feed (Swissquote). It IS the current market price. Prices you encounter inside web-search results are often minutes-to-hours STALE (cached articles, delayed quotes) — especially right after news releases. NEVER override the provided spot with a searched price, never re-anchor your levels to a searched price, and never report a "data quality failure" because a search snippet shows a different price. Use searches for news/levels/context ONLY; use the provided numbers for ALL price math.
+
 ═══ WAIT ALERT SYSTEM — REQUIRED ON EVERY RESPONSE ═══
 You MUST always include a "wait_type" string and a "triggers" object — for LONG and SHORT too, not only WAIT.
 
