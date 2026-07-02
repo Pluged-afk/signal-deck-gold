@@ -109,6 +109,7 @@ const GOLD = {
       <div style={card}>
         <p style={lbl}>Macro Drivers</p>
         <Stat title="DXY (Fed TWI) — rising = bearish gold" value={fmt(s.dxy)}/>
+        {s.dxy_nfp&&s.dxy_nfp!==""&&<p style={{fontSize:11,color:"#fbbf24",...mono,margin:"0 0 8px"}}>📊 {s.dxy_nfp}</p>}
         <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>10Y Real Yield — rising = bearish gold</p>
         <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(s.real_yield)}</p></div>
       </div>
@@ -155,9 +156,9 @@ SIGNAL RULES:
 - Off-peak session + no strong catalyst → cap confidence at MEDIUM
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
+{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","dxy_nfp":"post-NFP DXY reaction or empty","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
-  pipeline: async ({ keys, addLog }) => {
+  pipeline: async ({ keys, addLog, postNfp }) => {
     const tdCandles = async (interval, outputsize=100) => {
       const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
       if(d?.status==="error") throw new Error(`Twelve Data: ${d.message}`);
@@ -209,7 +210,20 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
             else if(Math.abs(spot.price-pdl)<=5) nearPD={level:pdl,side:"PDL"};
           }
         }
-        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, pdh,pdl,sweep,nearPD, bullMacd:bull, bearMacd:3-bull };
+        // current 1h true-range vs ATR(20) — elevated/extreme volatility flag
+        const li1=c1h.closes.length-1;
+        const trNow=Math.max(c1h.highs[li1]-c1h.lows[li1],Math.abs(c1h.highs[li1]-c1h.closes[li1-1]),Math.abs(c1h.lows[li1]-c1h.closes[li1-1]));
+        const atr20=calcATR(c1h.highs,c1h.lows,c1h.closes,20);
+        const volRatio=atr20?p2(trNow/atr20):null;
+        // post-NFP: move since the 12:00 UTC candle open (contains the 12:30 release)
+        let nfpMove=null, nfpLarge=false;
+        if(postNfp?.active&&c1h.times){
+          const day=new Date().toISOString().slice(0,10);
+          const idx=c1h.times.findIndex(t=>String(t).slice(0,10)===day&&String(t).slice(11,13)==="12");
+          if(idx>=0){ nfpMove=p2(spot.price-c1h.opens[idx]); nfpLarge=Math.abs(nfpMove)>40; }
+        }
+        const volFading=vol1h&&c1h.volumes[li1]<c1h.volumes[li1-1]&&vol1h.average&&(c1h.volumes[li1-1]/vol1h.average)>1.5;
+        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, pdh,pdl,sweep,nearPD, volRatio,nfpMove,nfpLarge,volFading, bullMacd:bull, bearMacd:3-bull };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
@@ -242,7 +256,8 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
     const session=getFxSession();
     const atr=td?.atr4h??td?.atr1h??null;
-    const stopAmt=atr?p2(atr*1.5):null, stopPct=stopAmt?p2((stopAmt/spot.price)*100):null;
+    const stopMult=postNfp?.active?1.2:1.5; // post-NFP: 20% tighter (sharp moves)
+    const stopAmt=atr?p2(atr*stopMult):null, stopPct=stopAmt?p2((stopAmt/spot.price)*100):null;
 
     const pkg=`=== PRE-COMPUTED MARKET DATA — DO NOT RE-FETCH ===
 
@@ -277,6 +292,12 @@ GOLD CONTEXT  Daily ATR:$${f2(td?.dailyAtr)} (${td?.dailyAtr>40?"HIGH vol — wi
   ⚠ Price within $5 of ${td.nearPD.side} ($${f2(td.nearPD.level)}) — stop-hunt risk, London false spike likely. Wait for a confirmed break or rejection before committing.`:""}
   Session candle note: London open (08-09 UTC) often false-breaks then reverses — wait for the 2nd candle. NY open (13:30-14:30 UTC) is the most reliable candle of the day.
 
+${postNfp?.active?`
+POST-NFP WINDOW (${postNfp.sinceMin} min since the 12:30 UTC release)
+  First 30 min are chaotic — most reliable signal after 13:00 UTC. Stop already tightened 20% (${stopMult}x ATR).
+  Move since NFP candle open: ${td?.nfpMove!=null?"$"+td.nfpMove:"n/a"}${td?.nfpLarge?" — LARGE MOVE ALREADY OCCURRED → prefer WAIT/pullback entries":""}
+  Volume context: ${td?.vol1h?(td.vol1h.ratio>3?"NFP volume spike — move is institutional, high conviction":td.vol1h.ratio>1.5?"Elevated volume — reliable signal":td.volFading?"Volume normalizing — initial reaction fading, cleaner entry forming":"normal volume"):"n/a"}
+  EXTRA TASK (one additional search): search "DXY dollar index NFP reaction today". If DXY up >0.3% set dxy_nfp to "DXY STRENGTHENING post-NFP — bearish gold bias confirmed (+X.X%)". If down >0.3% → "DXY WEAKENING post-NFP — bullish gold bias confirmed (-X.X%)". If flat → "DXY mixed post-NFP — rely on technicals for direction". Include the % change and a one-line analyst take.`:""}
 ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no Twelve Data key — score candles & mtf NEUTRAL)"}
 
 === YOUR JOB: search news, key S/R levels, binary events, Fed speakers → output JSON ===`;
@@ -295,6 +316,8 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(cot&&!p.cot_sentiment)  p.cot_sentiment=cot.sentiment;
     if(td?.pdh!=null) p.pdh=td.pdh.toFixed(2);
     if(td?.pdl!=null) p.pdl=td.pdl.toFixed(2);
+    if(td?.volRatio!=null) p._volRatio=td.volRatio;
+    if(td?.nfpLarge) p._nfpLarge=true;
     p._sweepNote = td?.sweep ? `🎯 LIQUIDITY SWEEP DETECTED at $${td.sweep.level.toFixed(2)} (${td.sweep.side}) — classic stop hunt. Reversal setup forming: ${td.sweep.note}.`
       : td?.nearPD ? `⚠️ Price near ${td.nearPD.side} ($${td.nearPD.level.toFixed(2)}) — stop hunt risk. London false spike likely. Wait for confirmed break or rejection.` : null;
     p._sources=[...(ta?["Real OHLCV"]:[]),...((macro.dxy!=null||macro.realYield!=null)?["FRED"]:[]),...(cot?["COT"]:[])];
@@ -371,6 +394,7 @@ const EUR = {
       <div style={card}>
         <p style={lbl}>DXY — inverse correlation ★</p>
         <Stat title="US Dollar Index — rising = SHORT EUR" value={fmt(s.dxy)} sub="~95% inverse to EUR/USD"/>
+        {s.dxy_nfp&&s.dxy_nfp!==""&&<p style={{fontSize:11,color:"#fbbf24",...mono,margin:"0 0 8px"}}>📊 {s.dxy_nfp}</p>}
         <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Risk sentiment</p>
         <p style={{...mono,fontSize:12,margin:0,color:s.news_sent==="BULLISH"?"#4ade80":s.news_sent==="BEARISH"?"#f87171":"#94a3b8"}}>{fmt(s.news_sent)} {s.news_sent==="BULLISH"?"(risk-on → EUR up)":s.news_sent==="BEARISH"?"(risk-off → EUR down)":""}</p></div>
       </div>
@@ -422,9 +446,9 @@ SIGNAL RULES:
 - Stop: use the ATR-based pip value provided. T1 min 1.5× ATR, T2 min 2.5× ATR. R:R <1:2 → WAIT.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"1.XXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXX","entry_note":"brief","stop":"1.XXXX","stop_note":"1.5x ATR","stop_pct":"45 pips","t1":"1.XXXX","t2":"1.XXXX","rr":"1:2.5","high_24h":"1.XXXX","low_24h":"1.XXXX","vwap":"1.XXXX","ema50":"1.XXXX","ema200":"1.XXXX","pivot":"1.XXXX","support":"1.XXXX","resistance":"1.XXXX","dxy":"XXX.XX — falling","rate_diff":"Fed > ECB by ~2%","fed_bias":"hawkish hold","ecb_bias":"dovish","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rates":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"data":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 X.XXXX — close 50% move stop to entry","T2 X.XXXX — close rest","Stop X.XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
+{"action":"LONG|SHORT|WAIT","price":"1.XXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXX","entry_note":"brief","stop":"1.XXXX","stop_note":"1.5x ATR","stop_pct":"45 pips","t1":"1.XXXX","t2":"1.XXXX","rr":"1:2.5","high_24h":"1.XXXX","low_24h":"1.XXXX","vwap":"1.XXXX","ema50":"1.XXXX","ema200":"1.XXXX","pivot":"1.XXXX","support":"1.XXXX","resistance":"1.XXXX","dxy":"XXX.XX — falling","dxy_nfp":"post-NFP DXY reaction or empty","rate_diff":"Fed > ECB by ~2%","fed_bias":"hawkish hold","ecb_bias":"dovish","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rates":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"data":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 X.XXXX — close 50% move stop to entry","T2 X.XXXX — close rest","Stop X.XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
-  pipeline: async ({ keys, addLog }) => {
+  pipeline: async ({ keys, addLog, postNfp }) => {
     const tdCandles = async (interval, outputsize=100) => {
       const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
       if(d?.status==="error") throw new Error(`Twelve Data: ${d.message}`);
@@ -468,7 +492,19 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
           if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
         const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
         const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
-        td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow, pdh,pdl };
+        const vol1h=calcVolRatio(c1h.volumes);
+        const li1=c1h.closes.length-1;
+        const trNow=Math.max(c1h.highs[li1]-c1h.lows[li1],Math.abs(c1h.highs[li1]-c1h.closes[li1-1]),Math.abs(c1h.lows[li1]-c1h.closes[li1-1]));
+        const atr20=calcATR(c1h.highs,c1h.lows,c1h.closes,20);
+        const volRatio=atr20?p2(trNow/atr20):null;
+        let nfpMove=null, nfpLarge=false;
+        if(postNfp?.active&&c1h.times){
+          const day=new Date().toISOString().slice(0,10);
+          const idx=c1h.times.findIndex(t=>String(t).slice(0,10)===day&&String(t).slice(11,13)==="12");
+          if(idx>=0){ nfpMove=Math.round((spot.price-c1h.opens[idx])*10000); nfpLarge=Math.abs(nfpMove)>40; }
+        }
+        const volFading=vol1h&&c1h.volumes[li1]<c1h.volumes[li1-1]&&vol1h.average&&(c1h.volumes[li1-1]/vol1h.average)>1.5;
+        td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow, pdh,pdl, vol1h,volRatio,nfpMove,nfpLarge,volFading };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
@@ -484,7 +520,8 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
     const session=getFxSession();
     const atr=td?.atr4h??null;
-    const stopAmt=atr?p5(atr*1.5):null;
+    const stopMult=postNfp?.active?1.2:1.5; // post-NFP: 20% tighter
+    const stopAmt=atr?p5(atr*stopMult):null;
     const stopPips=stopAmt?Math.round(stopAmt*10000):null;
 
     const pkg=`=== PRE-COMPUTED MARKET DATA — DO NOT RE-FETCH ===
@@ -514,6 +551,12 @@ EUR/USD CONTEXT  50 EMA (1h):${ff(td?.ema50_1h)} → price ${td?.ema50_1h?(spot.
   Daily range used: ${td?.rangeUsed!=null?`${td.rangeUsed}% (${td.todayPips}/${td.avgPips} pips avg)`+(td.rangeUsed>80?" — RANGE EXHAUSTED, avoid new entries":""):"n/a"}
   Session note: Asian (00-08 UTC) barely moves — ignore. London open (08-09) sets the range but often reverses — wait for 2nd candle. NY (13:30) often reverses London ("London close trap"). Best candles: 13-16 UTC overlap.
 
+${postNfp?.active?`
+POST-NFP WINDOW (${postNfp.sinceMin} min since the 12:30 UTC release)
+  First 30 min are chaotic — most reliable signal after 13:00 UTC. Stop already tightened 20% (${stopMult}x ATR).
+  Move since NFP candle open: ${td?.nfpMove!=null?td.nfpMove+" pips":"n/a"}${td?.nfpLarge?" — LARGE MOVE ALREADY OCCURRED → prefer WAIT/pullback entries":""}
+  Volume context: ${td?.vol1h?(td.vol1h.ratio>3?"NFP volume spike — move is institutional, high conviction":td.vol1h.ratio>1.5?"Elevated volume — reliable signal":td.volFading?"Volume normalizing — initial reaction fading, cleaner entry forming":"normal volume"):"n/a"}
+  EXTRA TASK (one additional search): search "DXY dollar index NFP reaction today". If DXY up >0.3% set dxy_nfp to "DXY STRENGTHENING post-NFP — bearish EUR/USD bias confirmed (+X.X%)". If down >0.3% → "DXY WEAKENING post-NFP — bullish EUR/USD bias confirmed (-X.X%)". If flat → "DXY mixed post-NFP — rely on technicals for direction". Include the % change and a one-line analyst take.`:""}
 ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no Twelve Data key — score candles & mtf NEUTRAL)"}
 
 === YOUR JOB: search ECB/Fed guidance, CPI differential, data releases, key S/R, binary events → output JSON ===`;
@@ -531,6 +574,8 @@ ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unava
     if(td?.pdh!=null) p.pdh=td.pdh.toFixed(5);
     if(td?.pdl!=null) p.pdl=td.pdl.toFixed(5);
     if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=`${macro.dxy}${macro.dxyDir?` — ${macro.dxyDir.toLowerCase()}`:""}`;
+    if(td?.volRatio!=null) p._volRatio=td.volRatio;
+    if(td?.nfpLarge) p._nfpLarge=true;
     p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
     mergeTA(p, ta, v=>v.toFixed(5));
   },

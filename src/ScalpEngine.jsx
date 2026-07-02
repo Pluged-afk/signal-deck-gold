@@ -6,6 +6,7 @@ import {
   bumpSignalCount, signalCount,
 } from "./shared";
 import { analyzeScalp, SCALP_SYSTEM, eur001, eur005 } from "./scalp";
+import { useLiveEvents } from "./calendar";
 
 const T = { accent: "#3b82f6", accentText: "#60a5fa", panelBg: "#0c1a3a", panelBorder: "#1e3a8a", loader: "#3b82f6" };
 
@@ -35,7 +36,8 @@ export default function ScalpEngine({ onBack, toggle }) {
   const addLog = m => { logRef.current = [...logRef.current, `[${new Date().toLocaleTimeString()}] ${m}`]; setDataLog([...logRef.current]); };
 
   const session = getFxSession();
-  const events = upcomingEvents(["ECB", "FOMC", "CPI", "NFP", "EUCPI"]);
+  const fallbackEvents = upcomingEvents(["ECB", "FOMC", "CPI", "NFP", "EUCPI"]);
+  const { events } = useLiveEvents(fallbackEvents, ["USD", "EUR"]); // live feed, hardcoded fallback
 
   const scalpPrecheck = () => {
     const now = Date.now(), h = new Date().getUTCHours();

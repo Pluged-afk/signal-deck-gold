@@ -10,6 +10,7 @@ import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
 import { runPreCheck, storeSignalForPrecheck, PrecheckCard, BinaryBlockCard, precheckSummary } from "./precheck";
 import { localWait } from "./ta";
+import { useLiveEvents } from "./calendar";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
@@ -33,13 +34,18 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
   const addLog = msg => { logRef.current=[...logRef.current,`[${new Date().toLocaleTimeString()}] ${msg}`]; setDataLog([...logRef.current]); };
 
-  const events = upcomingEvents(config.events);
+  // Live high-impact calendar (ForexFactory via our cached proxy); hardcoded
+  // estimates remain the fallback. postNfp = within 2h of the ACTUAL release
+  // time (catches holiday-shifted NFPs like Thu Jul 2).
+  const fallbackEvents = upcomingEvents(config.events);
+  const { events, isLive, postNfp } = useLiveEvents(fallbackEvents, config.id === "eur" ? ["USD", "EUR"] : ["USD"]);
+  const nfpAsset = config.id === "gold" || config.id === "eur";
 
   const fetchSignal = useCallback(async () => {
     if(!keys.anthropic){ setError("Anthropic API key required."); setKeysSet(false); return; }
     setPrecheck(null); setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
     try{
-      const { pkg, price, session, meta } = await config.pipeline({ keys, addLog });
+      const { pkg, price, session, meta } = await config.pipeline({ keys, addLog, postNfp: nfpAsset ? postNfp : null });
 
       // HARD GATE (softened): only force WAIT + skip the paid call when ALL THREE
       // timeframes disagree (genuine chop). A plain 4h/1h conflict now still runs
@@ -58,7 +64,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       addLog("Sending to AI for news + synthesis...");
       setCostN(bumpSignalCount()); // count this paid Anthropic call
-      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog, maxSearches:5 });
+      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog, maxSearches:(nfpAsset&&postNfp.active)?6:5 });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
       config.merge(parsed, meta);
@@ -85,7 +91,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally{ setLoading(false); }
-  }, [keys, config]);
+  }, [keys, config, postNfp.active, nfpAsset]);
 
   // Free local pre-check first; only call the paid signal if all conditions pass.
   const attemptSignal = useCallback(async (opts={}) => {
@@ -129,6 +135,17 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       </div>
 
       {headerExtra}
+
+      {/* Post-NFP window (gold + EUR): live-feed-aware, active for 2h after release */}
+      {nfpAsset && postNfp.active && (
+        <div style={{...card,background:"#0c1a3a",border:"1px solid #2563eb",marginBottom:10}}>
+          <p style={{fontSize:12,fontWeight:700,color:"#60a5fa",margin:"0 0 3px"}}>📊 POST-NFP WINDOW <span style={{...mono,fontWeight:400,fontSize:10,color:"#64748b"}}>({postNfp.sinceMin} min since release)</span></p>
+          <p style={{fontSize:11,color:"#93c5fd",...mono,margin:0,lineHeight:1.5}}>
+            First 30min chaotic — most reliable signal after 13:00 UTC / 4:00 PM EGY. Stops auto-tightened 20%.
+            {sig?._nfpLarge ? " ⚠ Large move already occurred — wait for pullback." : ""}
+          </p>
+        </div>
+      )}
 
       {/* Binary-event caution (24–72h away — informational, does not block) */}
       {(()=>{const now=Date.now();const ce=events.find(e=>e.date&&e.date-now>24*3600000&&e.date-now<=72*3600000);return ce?(
@@ -234,6 +251,20 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       {/* Signal */}
       {sig&&!loading&&(<>
+
+        {/* Elevated / extreme volatility (current 1h true-range vs ATR20) */}
+        {nfpAsset && sig._volRatio>=2 && (
+          <div style={{...card,background:"#1a0505",border:"1px solid #dc2626",marginBottom:10}}>
+            <p style={{fontSize:12,fontWeight:700,color:"#f87171",margin:"0 0 3px"}}>🚨 EXTREME VOLATILITY <span style={{...mono,fontWeight:400,fontSize:10,color:"#94a3b8"}}>(range {Math.round(sig._volRatio*100)}% of normal)</span></p>
+            <p style={{fontSize:11,color:"#fca5a5",...mono,margin:0,lineHeight:1.5}}>Consider waiting 30 minutes for the market to stabilize before entering.</p>
+          </div>
+        )}
+        {nfpAsset && sig._volRatio>=1.5 && sig._volRatio<2 && (
+          <div style={{...card,background:"#1f1206",border:"1px solid #ea580c",marginBottom:10}}>
+            <p style={{fontSize:12,fontWeight:700,color:"#fb923c",margin:"0 0 3px"}}>⚠️ ELEVATED VOLATILITY <span style={{...mono,fontWeight:400,fontSize:10,color:"#94a3b8"}}>(range {Math.round(sig._volRatio*100)}% of normal)</span></p>
+            <p style={{fontSize:11,color:"#fdba74",...mono,margin:0,lineHeight:1.5}}>Spreads may be wider than normal. Add 0.3–0.5 pips to all targets. Use early-warning exit levels.</p>
+          </div>
+        )}
 
         {/* Hero */}
         <div style={{...card,marginBottom:10}}>
@@ -407,7 +438,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
               <span style={{...mono,fontSize:10,fontWeight:600,color:urgencyCol(e.days),alignSelf:"center"}}>{e.in}</span>
             </div>
           ))}
-          <p style={{fontSize:9,color:"#334155",margin:"6px 0 0",lineHeight:1.4}}>{config.eventsNote} Dates auto-estimated — verify official calendar.</p>
+          <p style={{fontSize:9,color:"#334155",margin:"6px 0 0",lineHeight:1.4}}>{config.eventsNote} {isLive?"⚡ Live: ForexFactory high-impact feed (exact times).":"Dates auto-estimated — verify official calendar."}</p>
         </div>
       </div>
 
