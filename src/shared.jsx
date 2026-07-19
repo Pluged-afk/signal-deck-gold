@@ -2,6 +2,7 @@
 // SIGNAL DECK — shared library (styles, helpers, indicators, AI loop)
 // Used by all three asset engines. No asset-specific logic lives here.
 // ═══════════════════════════════════════════════════════════════════════════
+import { useState, useEffect } from "react";
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 export const mono = { fontFamily:"'JetBrains Mono','Fira Code','Courier New',monospace", fontWeight:500 };
@@ -33,6 +34,26 @@ export const cCol = c => c==="HIGH"?"#4ade80":c==="LOW"?"#f87171":"#fbbf24";
 export const sCol = s => s==="BULLISH"?"#4ade80":s==="BEARISH"?"#f87171":"#94a3b8";
 export const qCol = q => q==="best"?"#4ade80":q==="good"?"#fbbf24":q==="avoid"?"#f87171":"#94a3b8";
 
+// ─── Single live-time source (Section 4) ──────────────────────────────────────
+// Every time-dependent UI (session-quality label, next-refresh countdown, binary-
+// event strip, debug clock) must read from ONE live clock computed fresh on every
+// render — never a value cached at signal-generation time. useNow() ticks on an
+// interval and returns a fresh Date; components derive session/countdown from it.
+export const useNow = (intervalMs = 1000) => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => { const id = setInterval(() => setNow(new Date()), intervalMs); return () => clearInterval(id); }, [intervalMs]);
+  return now;
+};
+// Raw debug clock (Section 4): HH:MM:SS in UTC and in Egypt (UTC+3, the app-wide
+// convention used by toEgypt12). Displayed on the hero card so a stale/mislabeled
+// time source is immediately visible to the user.
+export const utcClockStr = (d = new Date()) =>
+  `${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}:${String(d.getUTCSeconds()).padStart(2,"0")}`;
+export const egyClockStr = (d = new Date()) => {
+  const h = ((d.getUTCHours() + 3) % 24 + 24) % 24; const ap = h >= 12 ? "PM" : "AM"; let h12 = h % 12; if (h12 === 0) h12 = 12;
+  return `${h12}:${String(d.getUTCMinutes()).padStart(2,"0")}:${String(d.getUTCSeconds()).padStart(2,"0")} ${ap}`;
+};
+
 // ─── Sessions ─────────────────────────────────────────────────────────────────
 export const isWeekend = () => { const d=new Date().getUTCDay(); return d===0||d===6; };
 
@@ -46,6 +67,30 @@ export const getFxSession = () => {
   if(h>=16&&h<17)  return { label:"US Session",    quality:"good" };
   if(h>=17&&h<21)  return { label:"US Late",       quality:"ok"   };
   return { label:"Asian / Off-Peak", quality:"avoid" };
+};
+
+// US500 (S&P 500 index CFD) — driven by the US EQUITY clock, not the FX clock.
+// Uses ACTUAL US Eastern time (DST-correct via Intl) for cash/pre-market so the
+// windows convert to EGY correctly in summer AND winter, rather than reusing the
+// FX/crypto UTC windows verbatim. Cash 9:30–16:00 ET is best; pre-market GOOD;
+// overnight/Globex thin → avoid; the ~23:00–24:00 EGY maintenance hour is closed.
+export const getUS500Session = () => {
+  const now = new Date();
+  const day = now.getUTCDay();
+  const egyH = (now.getUTCHours() + 3) % 24;
+  // Index CFD is effectively closed over the weekend (thin/gap-prone).
+  if (day === 6 || day === 0) return { label: "Weekend — index closed", quality: "avoid" };
+  // Daily maintenance halt (~11 PM–12 AM EGY / 20:00–21:00 UTC) — mark closed.
+  if (egyH === 23) return { label: "Maintenance halt — closed", quality: "avoid" };
+  let etMins = null;
+  try {
+    const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    if (!isNaN(et)) etMins = et.getHours() * 60 + et.getMinutes();
+  } catch (_) {}
+  if (etMins == null) return { label: "US session (ET clock unavailable)", quality: "ok" };
+  if (etMins >= 9 * 60 + 30 && etMins < 16 * 60) return { label: "US Cash", quality: "best" };
+  if (etMins >= 4 * 60 && etMins < 9 * 60 + 30) return { label: "Pre-market", quality: "good" };
+  return { label: "Overnight / Globex", quality: "avoid" };
 };
 
 // Crypto trades 24/7 — different quality map, weekend is "ok" not "avoid".
@@ -137,6 +182,18 @@ export const calcPivots = (h, l, c) => {
   const P=(h+l+c)/3;
   return { P, R1:2*P-l, S1:2*P-h, R2:P+(h-l), S2:P-(h-l) };
 };
+// Bollinger Bands (period, sd). Moved here from the removed scalp engine — ta.js
+// uses it for the 4h BB regime shared by every asset.
+export const bollinger = (closes, period = 20, sd = 2) => {
+  if (closes.length < period) return null;
+  const slice = closes.slice(-period);
+  const mid = slice.reduce((a, b) => a + b, 0) / period;
+  const variance = slice.reduce((a, b) => a + (b - mid) ** 2, 0) / period;
+  const std = Math.sqrt(variance);
+  const upper = mid + sd * std, lower = mid - sd * std;
+  const price = closes[closes.length - 1];
+  return { mid, upper, lower, width: (upper - lower) / mid * 100, position: price >= upper ? "UPPER" : price <= lower ? "LOWER" : "MIDDLE" };
+};
 
 // ─── Binary-event calendar (auto-estimated; AI web search is the real gate) ───
 const pad = n => String(n).padStart(2,"0");
@@ -206,11 +263,36 @@ export const inWindow = win => {
   return s <= e ? (cur >= s && cur < e) : (cur >= s || cur < e);
 };
 
+// ═══ Section 7: server-side proxy configuration ═════════════════════════════
+// PROXY_DATA routes the KEYED upstreams (Twelve Data, FRED, Glassnode) through
+// our same-origin /api/data function, which injects the key server-side — so no
+// data key ever appears in a browser network request. SIGNAL_PROXY controls, per
+// asset, whether the Anthropic call goes through /api/signal (server-side key) vs
+// the legacy in-browser path. Defaults ON (secure). Flip an asset to false only
+// as part of a deliberate, verified rollback (see runAI + the audit report).
+export const PROXY_DATA = true;
+export const SIGNAL_PROXY = { gold: true, us500: true, btc: true };
+export const signalProxyEnabled = id => SIGNAL_PROXY[id] !== false;
+
+// Wrap a keyed upstream URL so the request goes through the same-origin proxy
+// with the real key injected server-side. Any (masked) key param is stripped
+// client-side so the sentinel never even leaves the browser.
+export const proxyDataUrl = (src, rawUrl) => {
+  if (!PROXY_DATA) return rawUrl;
+  try {
+    const u = new URL(rawUrl);
+    u.searchParams.delete(src === "td" ? "apikey" : "api_key");
+    return `/api/data?src=${src}&u=${encodeURIComponent(u.toString())}`;
+  } catch (_) { return rawUrl; }
+};
+
 // ─── Twelve Data fetch with one 429 retry (rate-limit aware) ──────────────────
 // Returns parsed JSON. On a rate-limit response, waits 15s and retries once.
+// Routed through the server-side data proxy (Section 7) so the key stays server-side.
 export const tdFetch = async (url, addLog) => {
+  const target = proxyDataUrl("td", url);
   for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetch(url);
+    const r = await fetch(target);
     let d = null; try { d = await r.json(); } catch (_) {}
     const limited = r.status === 429 || d?.code === 429 || (d?.status === "error" && /limit|credit|run out/i.test(d?.message || ""));
     if (limited && attempt === 0) {
@@ -225,7 +307,28 @@ export const tdFetch = async (url, addLog) => {
 // ─── Anthropic multi-turn loop (centralised, with the conversation-history fix)
 // Order is strict: capture text → if end_turn break → if pause_turn echo+continue
 // → else push assistant, then handle tool_use. Never push-then-break.
-export async function runAI({ apiKey, system, userContent, addLog, model="claude-sonnet-4-6", maxTokens=6000, maxSearches }) {
+export async function runAI({ apiKey, system, userContent, addLog, model="claude-sonnet-4-6", maxTokens=6000, maxSearches, useProxy=false }) {
+  // ═══ Section 7: server-side proxy path (default) ═══════════════════════════
+  // The Anthropic key lives ONLY on the server. We POST the request payload to
+  // /api/signal, which runs the full multi-turn tool_use loop server-side (the
+  // conversation-history fix is preserved byte-for-byte inside that function) and
+  // returns just the final text + the pipeline logs to replay in the UI.
+  if (useProxy) {
+    addLog && addLog("Sending to secure signal proxy (server-side key)...");
+    const res = await fetch("/api/signal", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ system, userContent, model, maxTokens, maxSearches }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.error) throw new Error((data && data.error) || `Signal proxy error ${res.status}`);
+    (data.logs || []).forEach(l => addLog && addLog(l));
+    return data.text || "";
+  }
+
+  // ═══ LEGACY in-browser path — retained per the safe-rollout requirement (7B),
+  // NOT deleted. Only reachable when an asset's SIGNAL_PROXY flag is off. Note:
+  // with keys masked server-side (Section 7) `apiKey` is the sentinel, so this
+  // path is a documented rollback stub — a full revert also un-masks /api/keys.
   const tools=[{ type:"web_search_20250305", name:"web_search", ...(maxSearches?{ max_uses:maxSearches }:{}) }];
   let history=[{ role:"user", content:userContent }];
   let finalText="";
@@ -347,6 +450,24 @@ triggers — be SPECIFIC and ACTIONABLE. Use the pre-computed swing S/R, fib lev
 
 For LONG/SHORT: watch_long/watch_short may be "n/a", but invalidation, invalidation_note, news_time/news_event and a refresh_recommendation (e.g. "hold; re-check at the next 4h close or if price hits the invalidation level") are still REQUIRED.`;
 
+// ─── Accuracy & honesty rules (Sections 3b + 3e) — appended to every asset ────
+// Applied IDENTICALLY to Gold, BTC and US500 so the three engines stay in sync.
+export const ACCURACY_RULES = `
+
+═══ MULTIPLE SCENARIO OUTPUT — REQUIRED ON EVERY RESPONSE (LONG, SHORT and WAIT) ═══
+Markets branch. In addition to your main call you MUST map the two realistic alternate branches. Add these THREE top-level keys to your JSON:
+- "primary_scenario": one sentence describing your base-case path (the direction/thesis your action reflects) and what price action would confirm it.
+- "alternate_bullish": { "trigger": "the specific price level/condition that would activate a bullish path", "confirm": "the confirming price/close that validates it" }
+- "alternate_bearish": { "trigger": "the specific price level/condition that would activate a bearish path", "confirm": "the confirming price/close that validates it" }
+Use the pre-computed levels (fib, swing S/R, PDH/PDL, round numbers, BB bands) as the concrete trigger/confirm prices. These are REAL branches, not a hedge — only one will occur; you are not predicting which.
+
+═══ HONEST CONFIDENCE LANGUAGE — REQUIRED ═══
+Use probabilistic, non-deterministic language everywhere (reasoning, notes, scenarios). NEVER use "will", "guaranteed", "certain", "confirmed move", "definitely", "always/never happens". Prefer "likely", "favoured", "elevated probability", "leans", "suggests", "risk of". Confidence reflects how well the data ALIGNS — it is NOT a probability of profit. Losing trades are a normal, expected outcome of any edge. Do not imply certainty of outcome in any field.`;
+
+// Permanent risk footer shown on every signal (Section 3e).
+export const PERMANENT_FOOTER =
+  "No signal predicts outcomes with certainty. Confidence reflects data alignment, not guaranteed results. Losses are a normal part of any trading approach.";
+
 // ─── Session cost tracking (counts paid Anthropic calls this browser session) ─
 export const EST_COST = 0.18;      // € per paid signal — low estimate
 export const EST_COST_HIGH = 0.70; // € per paid signal — high estimate (more web search)
@@ -355,7 +476,7 @@ export const signalCount = () => { try { return parseInt(sessionStorage.getItem(
 
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
-export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };
+export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", glassnode:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"", glassnode:"" }; } };
 // Saving also pushes to the encrypted server store (/api/keys, gated by the login
 // cookie) so keys survive browser clears and follow the passcode across devices.
 export const saveKeys = k => {

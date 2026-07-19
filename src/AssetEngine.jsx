@@ -3,14 +3,16 @@ import {
   mono, card, lbl, fmt, inputStyle,
   aStyl, rStyl, cCol, sCol, qCol,
   parseJSON, runAI, isWeekend, upcomingEvents,
-  loadKeys, saveKeys, WAIT_RULES, egyptWindow, urgencyCol, inWindow,
+  loadKeys, saveKeys, WAIT_RULES, ACCURACY_RULES, PERMANENT_FOOTER, egyptWindow, urgencyCol, inWindow,
   bumpSignalCount, signalCount, EST_COST, EST_COST_HIGH,
+  useNow, utcClockStr, egyClockStr, signalProxyEnabled,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
+import { MarginalBanner, ScenarioMap, OutcomeMap } from "./RiskCards";
 import { runPreCheck, storeSignalForPrecheck, PrecheckCard, BinaryBlockCard, precheckSummary } from "./precheck";
 import { localWait } from "./ta";
-import { useLiveEvents } from "./calendar";
+import { useLiveEvents, EventStrip, computeMarginal, upcomingLive } from "./calendar";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
 // data path that runs — switching assets unmounts this and its state.
@@ -38,13 +40,20 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   // estimates remain the fallback. postNfp = within 2h of the ACTUAL release
   // time (catches holiday-shifted NFPs like Thu Jul 2).
   const fallbackEvents = upcomingEvents(config.events);
-  const { events, isLive, postNfp } = useLiveEvents(fallbackEvents, config.id === "eur" ? ["USD", "EUR"] : ["USD"]);
-  const nfpAsset = config.id === "gold" || config.id === "eur";
+  // All current assets (gold / US500 / BTC) key off USD macro events.
+  const { events, all: calAll, isLive, postNfp, refresh } = useLiveEvents(fallbackEvents, ["USD"]);
+  // Only Gold's pipeline implements the post-NFP window handling.
+  const nfpAsset = config.id === "gold";
+  // Single live clock (Section 4): drives the debug timestamp + session labels.
+  const now = useNow(1000);
 
   const fetchSignal = useCallback(async () => {
     if(!keys.anthropic){ setError("Anthropic API key required."); setKeysSet(false); return; }
     setPrecheck(null); setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
     try{
+      // Section 5: pull a fresh calendar so binary-event awareness is never stale.
+      const freshAll = await refresh(false).catch(()=>null);
+      const evNow = freshAll ? upcomingLive(freshAll, ["USD"]) : events;
       const { pkg, price, session, meta } = await config.pipeline({ keys, addLog, postNfp: nfpAsset ? postNfp : null });
 
       // HARD GATE (softened): only force WAIT + skip the paid call when ALL THREE
@@ -53,9 +62,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       const ta = meta.ta;
       if(ta && ta.allDisagree){
         addLog(`All timeframes disagree (4h ${ta.t4} / 1h ${ta.t1} / 15m ${ta.t15}) — forcing WAIT, skipping AI call`);
-        const parsed = localWait(ta, price, config.pricePrefix===""?5:2);
+        const parsed = localWait(ta, price, config.decimals || 2);
         config.merge(parsed, meta);
         parsed.session = session.label; parsed.session_quality = session.quality;
+        parsed._marginal = computeMarginal(ta, evNow, Date.now());
         addLog("Signal complete (local WAIT).");
         setSig(parsed); setTs(new Date());
         try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
@@ -64,7 +74,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       addLog("Sending to AI for news + synthesis...");
       setCostN(bumpSignalCount()); // count this paid Anthropic call
-      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES, userContent:pkg, addLog, maxSearches:(nfpAsset&&postNfp.active)?6:5 });
+      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES + ACCURACY_RULES, userContent:pkg, addLog, maxSearches:(nfpAsset&&postNfp.active)?6:5, useProxy:signalProxyEnabled(config.id) });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
       config.merge(parsed, meta);
@@ -86,12 +96,13 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         }
       }
 
+      parsed._marginal = computeMarginal(ta, evNow, Date.now());
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
       try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally{ setLoading(false); }
-  }, [keys, config, postNfp.active, nfpAsset]);
+  }, [keys, config, postNfp.active, nfpAsset, events, refresh]);
 
   // Free local pre-check first; only call the paid signal if all conditions pass.
   const attemptSignal = useCallback(async (opts={}) => {
@@ -100,15 +111,23 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     if(usesTD && !keys.td && !opts.ackTD){ setTdWarn(true); setPrecheck(null); return; }
     setTdWarn(false);
     setPrechecking(true); setError(null);
-    const res = await runPreCheck({ config, keys, events });
+    // Section 5: force a fresh calendar pull so the pre-check's binary gate and
+    // the event strip are computed from live data, not an earlier cached value.
+    const freshAll = await refresh(true).catch(()=>null);
+    const evs = freshAll ? upcomingLive(freshAll, ["USD"]) : events;
+    const res = await runPreCheck({ config, keys, events: evs });
     setPrechecking(false);
     setPrecheck({ ...res, ts:Date.now() });
     if(res.pass) fetchSignal();
-  }, [keys, config, events, fetchSignal, usesTD]);
+  }, [keys, config, events, fetchSignal, usesTD, refresh]);
 
   const as = sig?aStyl(sig.action):{};
   const sc = sig?.scorecard||{};
   const wknd = isWeekend();
+  const dec = config.decimals || 2; // price decimals (all current assets: 2)
+  // Section 4: session label recomputed LIVE from the single clock each render
+  // (the `now` tick forces re-render), never frozen at signal-generation time.
+  const liveSession = config.session ? config.session() : null;
 
   // Themed buttons
   const primaryBtn = { padding:"8px 18px", background:"#1e293b", border:`1px solid ${T.accent}`, borderRadius:8, color:T.accentText, fontSize:12, cursor:"pointer", ...mono };
@@ -136,7 +155,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       {headerExtra}
 
-      {/* Post-NFP window (gold + EUR): live-feed-aware, active for 2h after release */}
+      {/* Section 5: always-on binary-event awareness strip (live, re-renders every 60s) */}
+      <EventStrip all={calAll} currencies={["USD"]} fallbackEvents={fallbackEvents} />
+
+      {/* Post-NFP window (gold): live-feed-aware, active for 2h after release */}
       {nfpAsset && postNfp.active && (
         <div style={{...card,background:"#0c1a3a",border:"1px solid #2563eb",marginBottom:10}}>
           <p style={{fontSize:12,fontWeight:700,color:"#60a5fa",margin:"0 0 3px"}}>📊 POST-NFP WINDOW <span style={{...mono,fontWeight:400,fontSize:10,color:"#64748b"}}>({postNfp.sinceMin} min since release)</span></p>
@@ -276,7 +298,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
                 <span style={{fontSize:11,color:"#475569"}}>{config.symbol}</span>
               </div>
               <div style={{display:"flex",gap:8,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
-                <span style={{...mono,fontSize:11,color:qCol(sig.session_quality),padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>{sig.session}{sig.session_quality?` · ${sig.session_quality}`:""}</span>
+                <span style={{...mono,fontSize:11,color:qCol(liveSession?.quality||sig.session_quality),padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>{liveSession?.label||sig.session}{(liveSession?.quality||sig.session_quality)?` · ${liveSession?.quality||sig.session_quality}`:""}</span>
                 {sig.passes!==undefined&&(()=>{const need=Math.ceil(config.passesOf*0.6);return <span style={{...mono,fontSize:11,color:sig.passes>=need?"#4ade80":sig.passes>=need-1?"#fbbf24":"#f87171"}}>{sig.passes}/{config.passesOf} confirmed</span>;})()}
                 {sig.signal_quality&&<span style={{...mono,fontSize:11,color:T.accentText,padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>Q {sig.signal_quality}</span>}
                 {sig.action==="WAIT"&&sig.wait_type&&sig.wait_type!=="none"&&<span style={{...mono,fontSize:11,fontWeight:600,color:waitTypeMeta(sig.wait_type).col}}>{waitTypeMeta(sig.wait_type).label}</span>}
@@ -293,7 +315,14 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
               <span style={{fontSize:11,color:uc,...mono}}>⚠ Binary event: {sig.binary_event}</span>
             </div>
           );})()}
+          {/* Section 4: live raw time debug line — one live clock, computed fresh each tick */}
+          <p style={{...mono,fontSize:9,color:"#475569",margin:"8px 0 0",textAlign:"right"}}>
+            System time: {egyClockStr(now)} EGY · UTC: {utcClockStr(now)}
+          </p>
         </div>
+
+        {/* Section 3c: marginal-setup hero banner (visible regardless of confidence) */}
+        <MarginalBanner conditions={sig._marginal}/>
 
         {/* Gold PDH/PDL stop-hunt / liquidity-sweep alert */}
         {sig._sweepNote && (
@@ -313,6 +342,9 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         {/* WAIT → watch-for card replaces the entry plan; LONG/SHORT → invalidation card */}
         {sig.action==="WAIT" && <WaitCard sig={sig} pricePrefix={config.pricePrefix}/>}
         {sig.action!=="WAIT" && <InvalidationCard sig={sig} pricePrefix={config.pricePrefix}/>}
+
+        {/* Section 3b: scenario map (primary + alternate branches) — all actions */}
+        <ScenarioMap sig={sig} pricePrefix={config.pricePrefix}/>
 
         {/* Entry + Levels (hidden on WAIT — there is no trade to plan) */}
         {sig.action!=="WAIT" && (<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -348,11 +380,14 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           </div>
         </div>)}
 
+        {/* Section 3d: outcome map (price / € / % of account) — below Entry Plan on LONG/SHORT */}
+        {sig.action!=="WAIT" && <OutcomeMap sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id}/>}
+
         {/* Asset-specific panels (macro / derivatives / rates) */}
         {config.extraPanels(sig)}
 
         {/* Multi-timeframe TA: quality, pattern alert, MTF table, fib, pullback, entries */}
-        <TACards sig={sig} T={T} pricePrefix={config.pricePrefix} decimals={config.pricePrefix===""?5:2}/>
+        <TACards sig={sig} T={T} pricePrefix={config.pricePrefix} decimals={dec}/>
 
         {/* Scorecard */}
         <div style={{...card,marginBottom:10}}>
@@ -409,6 +444,11 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
               {dataLog.map((l,i)=><div key={i} style={{...mono,fontSize:10,color:"#334155",lineHeight:1.7}}>{l}</div>)}
             </div>
           )}
+        </div>
+
+        {/* Section 3e: permanent honesty footer — shown on every signal */}
+        <div style={{...card,background:"#0b1220",border:"1px solid #1e293b",marginBottom:10}}>
+          <p style={{fontSize:10,color:"#64748b",...mono,margin:0,lineHeight:1.6}}>{PERMANENT_FOOTER}</p>
         </div>
       </>)}
 

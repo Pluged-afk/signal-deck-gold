@@ -5,9 +5,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import {
   mono, card, lbl, fmt, p2, p5,
-  calcMACD, calcRSI, calcATR, calcSMA, calcVWAP, calcVolRatio, calcEMAlast, calcPivots,
-  getFxSession, getCryptoSession,
-  f1, f2, f3, na, rsiLbl, rsiLblGold, volLbl, tdFetch,
+  calcMACD, calcRSI, calcATR, calcSMA, calcVWAP, calcVolRatio,
+  getFxSession, getCryptoSession, getUS500Session,
+  f1, f2, f3, na, rsiLbl, rsiLblGold, volLbl, tdFetch, proxyDataUrl,
 } from "./shared";
 import { analyzeTimeframes, signalQuality, taPromptBlock } from "./ta";
 
@@ -56,7 +56,7 @@ const GOLD = {
   ],
   session:getFxSession,
   quickPrice: async (keys) => {
-    if(keys.td){ try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price>100) return {price:p2(d.price),src:"Twelve Data"}; }catch(_){} }
+    if(keys.td){ try{ const r=await fetch(proxyDataUrl("td", `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`)); const d=await r.json(); if(d.price>100) return {price:p2(d.price),src:"Twelve Data"}; }catch(_){} }
     try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"); if(r.ok){const d=await r.json();if(d?.["pax-gold"]?.usd>100) return {price:p2(d["pax-gold"].usd),src:"CoinGecko"};} }catch(_){}
     return null;
   },
@@ -167,7 +167,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     };
     // Returns latest value + direction vs the prior reading (we already fetch 5
     // observations — direction was being thrown away, yet the scorecard rules on it).
-    const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
+    const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
 
     addLog("Fetching spot price...");
     let spot=null, sqMid=null;
@@ -250,13 +250,18 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       addLog(`FRED → real:${macro.realYield}% (${macro.realYieldDir||"?"}) DXY:${macro.dxy} (${macro.dxyDir})`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
-    addLog("Fetching COT (CFTC)...");
+    addLog("Fetching COT (CFTC — COMEX gold managed money)...");
     let cot=null;
     try{
-      const r=await fetch("https://publicreporting.cftc.gov/resource/yw9f-hn96.json?$limit=2&$order=report_date_as_yyyy_mm_dd%20DESC&$where=commodity_name%20like%20'%25GOLD%25'");
+      // Section 6 fix: the disaggregated futures-only report (72hh-3qpy) with an
+      // EXACT commodity_name='GOLD' filter. The old query used the financial-
+      // futures dataset (yw9f-hn96) + a '%GOLD%' LIKE, which has no COMEX gold and
+      // matched "GOLDMAN-SACHS COMMODITY INDEX" (no managed-money fields → net 0).
+      // Field names here are m_money_positions_* (not managed_money_positions_*).
+      const r=await fetch("https://publicreporting.cftc.gov/resource/72hh-3qpy.json?$limit=2&$order=report_date_as_yyyy_mm_dd%20DESC&$where=commodity_name=%27GOLD%27");
       if(r.ok){ const d=await r.json(); if(d.length){ const lat=d[0],prev=d[1];
-        const mmL=parseInt(lat.managed_money_positions_long_all||0), mmS=parseInt(lat.managed_money_positions_short_all||0), net=mmL-mmS;
-        const pNet=prev?parseInt(prev.managed_money_positions_long_all||0)-parseInt(prev.managed_money_positions_short_all||0):null;
+        const mmL=parseInt(lat.m_money_positions_long_all||0), mmS=parseInt(lat.m_money_positions_short_all||0), net=mmL-mmS;
+        const pNet=prev?parseInt(prev.m_money_positions_long_all||0)-parseInt(prev.m_money_positions_short_all||0):null;
         cot={ mmLong:mmL,mmShort:mmS,netMM:net,weekChange:pNet!==null?net-pNet:null,reportDate:lat.report_date_as_yyyy_mm_dd, sentiment:net>200000?"CROWDED_LONG":net<50000?"CROWDED_SHORT":"NEUTRAL" };
       } }
     }catch(_){}
@@ -334,258 +339,286 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// ASSET 2 — EUR/USD
+// ASSET 2 — US500 (S&P 500 index CFD)
 // ════════════════════════════════════════════════════════════════════════════
-const EUR = {
-  id:"eur", name:"SIGNAL DECK · EUR/USD", symbol:"EUR/USD", headerNote:"EUR/USD · Fed vs ECB · Real APIs",
+// Twelve Data has no single canonical S&P symbol across plans, so we try a list
+// (SPX index → ES futures proxy → US500 CFD → GSPC) and use whichever returns
+// valid candles, logging which one served the data (Sections 1 & 6).
+const US500_SYMBOLS = ["SPX", "ES", "US500", "GSPC"];
+
+// Approximate quarterly US earnings-season windows — mega-cap reports cluster
+// mid-month in Jan / Apr / Jul / Oct. Hardcoded (Section 1): flags elevated
+// single-name / index volatility. Computed locally, no API.
+const earningsFlag = () => {
+  const d = new Date();
+  const q = { 0:"Q4", 3:"Q1", 6:"Q2", 9:"Q3" }[d.getUTCMonth()]; // Jan/Apr/Jul/Oct
+  const day = d.getUTCDate();
+  return (q && day >= 10 && day <= 31) ? `${q} earnings season — mega-cap volatility possible` : "";
+};
+
+const US500 = {
+  id:"us500", name:"SIGNAL DECK · US500", symbol:"US500 (S&P 500 CFD)", headerNote:"US500 · 10-Step · Real APIs",
   pricePrefix:"",
-  theme:{ accent:"#3b82f6", accentText:"#60a5fa", panelBg:"#0c1a3a", panelBorder:"#1e3a8a", loader:"#3b82f6" },
+  theme:{ accent:"#0891b2", accentText:"#22d3ee", panelBg:"#062a34", panelBorder:"#155e75", loader:"#0891b2" },
   keyFields:[
     { field:"anthropic", label:"Anthropic API Key", hint:"required — powers the AI signal", ph:"sk-ant-..." },
-    { field:"td",        label:"Twelve Data Key",   hint:"MACD, RSI, ATR, EMA, VWAP, pivots", ph:"a1b2c3d4..." },
-    { field:"fred",      label:"FRED API Key",      hint:"DXY + Fed funds + 10Y (free)", ph:"abcdef123456..." },
+    { field:"td",        label:"Twelve Data Key",   hint:"MACD, RSI, ATR, VWAP, Volume, 200MA — required for index data", ph:"a1b2c3d4..." },
+    { field:"fred",      label:"FRED API Key",      hint:"10Y yield + Fed expectations (free)", ph:"abcdef123456..." },
   ],
-  session:getFxSession,
+  session:getUS500Session,
   quickPrice: async (keys) => {
-    if(keys.td){ try{ const r=await fetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`); const d=await r.json(); if(d.price>0.5) return {price:p5(d.price),src:"Twelve Data"}; }catch(_){} }
-    try{ const r=await fetch("https://open.er-api.com/v6/latest/EUR"); if(r.ok){const d=await r.json();if(d?.rates?.USD>0.5) return {price:p5(d.rates.USD),src:"open.er-api"};} }catch(_){}
-    try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=eur"); if(r.ok){const d=await r.json();const e=d?.tether?.eur;if(e>0.5) return {price:p5(1/e),src:"CoinGecko USDT/EUR"};} }catch(_){}
+    if(keys.td){ for(const sym of US500_SYMBOLS){ try{ const r=await fetch(proxyDataUrl("td", `https://api.twelvedata.com/price?symbol=${encodeURIComponent(sym)}&apikey=${keys.td}`)); const d=await r.json(); if(parseFloat(d.price)>100) return {price:p2(d.price),src:`Twelve Data (${sym})`}; }catch(_){} } }
     return null;
   },
   sessionsGuide:[
-    { window:"08:00–10:00 UTC", label:"London Open — highest EUR/USD volume", quality:"best" },
-    { window:"13:00–16:00 UTC", label:"EU-US Overlap — most reliable breakouts", quality:"best" },
-    { window:"16:00–17:00 UTC", label:"US — good, slows after 17:00", quality:"good" },
-    { window:"21:00–08:00 UTC", label:"Asian — avoid, barely moves", quality:"avoid" },
+    { window:"13:30–20:00 UTC", label:"US Cash (9:30 AM–4:00 PM ET) — best liquidity", quality:"best" },
+    { window:"08:00–13:30 UTC", label:"Pre-market (4:00–9:30 AM ET) — thinner, gap-prone", quality:"good" },
+    { window:"20:00–21:00 UTC", label:"Daily maintenance halt — market closed", quality:"avoid" },
+    { window:"21:00–08:00 UTC", label:"Overnight / Globex — thin liquidity, gap-prone", quality:"avoid" },
   ],
-  weekendNote:{ title:"EUR/USD — Pepperstone weekend", lines:[
-    "Spread widens to 2–4 pips (vs 0.6–1 weekday)","Some liquidity from Asian forex markets",
-    "Best weekend window: Sunday 21:00 UTC (weekly open)",
-  ], rec:"Only trade with 20+ pip TP targets. Viable for swings, not scalping." },
-  events:["ECB","FOMC","CPI","NFP","EUCPI"], eventsNote:"ECB & Fed decisions and the CPI differential dominate EUR/USD.",
+  weekendNote:{ title:"US500 — Pepperstone weekend", lines:[
+    "Index CFD closed / thin over the weekend","Cash S&P 500 does not trade — only synthetic pricing",
+    "Gaps are common on the Sunday/Monday reopen",
+  ], rec:"Do not trade US500 on weekends. Wait for the US cash session (4:30–11:00 PM EGY)." },
+  events:["FOMC","CPI","NFP","PCE","GDP"], eventsNote:"US500 reacts to Fed policy, CPI/PCE inflation, NFP & ISM — plus mega-cap earnings.",
   riskRules:[
-    "Max 1-2% of account at risk per trade","Stop = 1.5× 4h ATR (typically 50-80 pips)",
-    "Minimum R:R 1:2","DXY direction is the dominant filter — never fight it",
-    "Avoid Asian session — EUR/USD is choppy and thin","At 0.01 lots, 1 pip ≈ $0.10 — small account can use 0.02-0.05 lots",
+    "Max 1-2% of account at risk per trade","ATR-based stop = 1.5× 4h ATR — do not widen it","Minimum R:R 1:2",
+    "⚠ Overnight gap risk on index CFDs — a gap can jump your stop. Size for it or close before session end",
+    "VIX >25 → reduce size; VIX <15 → complacency, expect sharper reversals","Exit 100% before FOMC / CPI / NFP / PCE",
+    "⚠ CONFIRM Pepperstone's exact €/point value for the US500 CFD at your minimum lot size BEFORE sizing — this is a placeholder until you verify it",
   ],
   scTitle:"10-Step Scorecard", passesOf:10,
   scRows:[
-    { key:"price",  label:"1. Price vs VWAP/EMAs" },
-    { key:"macd",   label:"2. MACD 1h/4h" },
-    { key:"rsi",    label:"3. RSI 1h/4h" },
-    { key:"dxy",    label:"4. DXY (inverse) ★" },
-    { key:"rates",  label:"5. Fed vs ECB" },
-    { key:"data",   label:"6. Economic data" },
-    { key:"levels", label:"7. Levels / Pivots" },
-    { key:"news",   label:"8. News / Risk sentiment" },
+    { key:"price",   label:"1. Price & VWAP/Session" },
+    { key:"macd",    label:"2. MACD 1h/4h/Daily" },
+    { key:"rsi_ma",  label:"3. RSI 70/30 + 200MA" },
+    { key:"vix_fed", label:"4. VIX + Fed Expectations" },
+    { key:"cot",     label:"5. COT (S&P futures)" },
+    { key:"levels",  label:"6. Levels / Fib / PDH-PDL" },
+    { key:"regime",  label:"7. Regime / Structure" },
+    { key:"news",    label:"8. News / Macro" },
     ...TA_ROWS,
   ],
   readyLines:(k)=>[
-    k.td?"✓ Twelve Data (MACD/RSI/ATR/EMA50/EMA200/VWAP/pivots)":"⚠ No Twelve Data — AI inference only",
-    (k.fred?"✓ FRED (DXY + Fed funds + 10Y)":"⚠ No FRED — web search fallback")+" · Web search (ECB/Fed + news)",
+    k.td?"✓ Twelve Data (MACD/RSI/ATR/VWAP/Volume/200MA — SPX→ES→US500 fallback)":"⚠ No Twelve Data — index data unavailable",
+    (k.fred?"✓ FRED (10Y yield + Fed expectations)":"⚠ No FRED — web search fallback")+" · VIX via web search · Session windows assume US EDT",
   ],
-  levelsTitle:"Key Levels & EMAs",
+  levelsTitle:"Key Levels",
   levels:(s)=>[
-    { name:"24h High",   val:fmt(s.high_24h) },
-    { name:"24h Low",    val:fmt(s.low_24h) },
-    { name:"PDH",        val:fmt(s.pdh) },
-    { name:"PDL",        val:fmt(s.pdl) },
-    { name:"VWAP",       val:fmt(s.vwap) },
-    { name:"50 EMA (4h)",  val:fmt(s.ema50) },
-    { name:"200 EMA (4h)", val:fmt(s.ema200) },
-    { name:"Pivot",      val:fmt(s.pivot) },
-    { name:"Support",    val:fmt(s.support) },
-    { name:"Resistance", val:fmt(s.resistance) },
+    { name:"24h High",   val:`${fmt(s.high_24h)}` },
+    { name:"24h Low",    val:`${fmt(s.low_24h)}` },
+    { name:"PDH",        val:`${fmt(s.pdh)}` },
+    { name:"PDL",        val:`${fmt(s.pdl)}` },
+    { name:"VWAP",       val:`${fmt(s.vwap)}` },
+    { name:"Support",    val:`${fmt(s.support)}` },
+    { name:"Resistance", val:`${fmt(s.resistance)}` },
+    { name:"200-Day MA", val:`${fmt(s.ma200)}` },
+    { name:"BB Upper (4h)", val:`${fmt(s.bb_upper)}` },
+    { name:"BB Lower (4h)", val:`${fmt(s.bb_lower)}` },
   ],
   extraPanels:(s)=>(
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
       <div style={card}>
-        <p style={lbl}>DXY — inverse correlation ★</p>
-        <Stat title="US Dollar Index — rising = SHORT EUR" value={fmt(s.dxy)} sub="~95% inverse to EUR/USD"/>
-        {s.dxy_nfp&&s.dxy_nfp!==""&&<p style={{fontSize:11,color:"#fbbf24",...mono,margin:"0 0 8px"}}>📊 {s.dxy_nfp}</p>}
-        <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Risk sentiment</p>
-        <p style={{...mono,fontSize:12,margin:0,color:s.news_sent==="BULLISH"?"#4ade80":s.news_sent==="BEARISH"?"#f87171":"#94a3b8"}}>{fmt(s.news_sent)} {s.news_sent==="BULLISH"?"(risk-on → EUR up)":s.news_sent==="BEARISH"?"(risk-off → EUR down)":""}</p></div>
+        <p style={lbl}>Volatility & Rates</p>
+        <Stat title="VIX — rising = risk-off (bearish), falling = risk-on (bullish)" value={fmt(s.vix)} sub=">25 reduce size · <15 complacency warning"/>
+        <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Fed rate expectations</p>
+        <p style={{...mono,fontSize:12,margin:0,color:"#e2e8f0"}}>{fmt(s.fed_expectations)}</p></div>
+        {s.real_yield&&s.real_yield!==""&&<p style={{fontSize:10,color:"#64748b",...mono,margin:"6px 0 0"}}>10Y: {fmt(s.real_yield)}</p>}
       </div>
       <div style={card}>
-        <p style={lbl}>Fed vs ECB rate differential</p>
-        <Stat title="Differential bias" value={fmt(s.rate_diff)}/>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Fed</p><p style={{...mono,fontSize:12,margin:0,color:"#e2e8f0"}}>{fmt(s.fed_bias)}</p></div>
-          <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>ECB</p><p style={{...mono,fontSize:12,margin:0,color:"#e2e8f0"}}>{fmt(s.ecb_bias)}</p></div>
-        </div>
+        <p style={lbl}>Positioning & Earnings</p>
+        <Stat title="COT — S&P 500 futures (asset managers)" value={fmt(s.cot_sentiment)} sub={s.cot_net&&s.cot_net!==""?`net ${s.cot_net}`:"CFTC TFF weekly"}/>
+        {s.earnings_flag&&s.earnings_flag!==""&&<p style={{fontSize:11,color:"#22d3ee",...mono,margin:"0 0 8px"}}>📊 {s.earnings_flag}</p>}
+        <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Risk sentiment</p>
+        <p style={{...mono,fontSize:12,margin:0,color:s.news_sent==="BULLISH"?"#4ade80":s.news_sent==="BEARISH"?"#f87171":"#94a3b8"}}>{fmt(s.news_sent)} {s.news_sent==="BULLISH"?"(risk-on)":s.news_sent==="BEARISH"?"(risk-off)":""}</p></div>
       </div>
     </div>
   ),
-  system:`You are SIGNAL DECK EUR/USD, a EUR/USD analysis engine for paper trading education only. Not financial advice. Never fabricate prices.
+  system:`You are SIGNAL DECK US500, an S&P 500 index CFD analysis engine for paper trading education only. Not financial advice. Never fabricate prices.
 
-ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, EMA, VWAP, pivots, or DXY. These are calculated from real API data.
+ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, VWAP, volume, 200MA, or the 10Y yield. These are calculated from real API data.
 
-YOUR JOB (web search only):
-1. NEWS: EUR/USD news last 24h, risk sentiment (risk-on = EUR up, risk-off = EUR down).
-2. CENTRAL BANKS: ECB latest decision & forward guidance; Fed latest statement & dot plot. Determine hawkish/dovish bias for each.
-3. DATA DIFFERENTIAL: Eurozone CPI vs US CPI; PMI, retail sales released today; which economy is printing stronger.
-4. LEVELS: Nearest institutional EUR/USD support/resistance; confirm/refine provided pivots.
-5. BIAS SYNTHESIS: All pre-computed data + research → highest-probability direction.
+YOUR JOB (web search only for these):
+1. VIX (REQUIRED — there is no free VIX API): search "VIX level today CBOE" and report the current VIX with direction. Rising VIX = risk-off / bearish equities; falling = risk-on / bullish. VIX >25 = elevated fear (reduce size); VIX <15 = complacency warning (sharp reversals possible).
+2. NEWS: top US equity market news last 24h — Fed commentary, mega-cap moves, sector rotation, geopolitical risk.
+3. FED EXPECTATIONS: rate cut/hike odds, next-FOMC bias, recent Fed speakers.
+4. KEY LEVELS: nearest major S&P 500 institutional support/resistance; confirm or refine the provided S/R.
+5. MACRO CONTEXT: FOMC/CPI/NFP/PCE/ISM within 48h? Earnings season? → highest-probability directional bias.
 
-KEY EUR/USD LOGIC:
-- DXY direction is the single most important factor (~95% inverse). DXY rising = SHORT EUR/USD. DXY falling = LONG.
-- Fed hawkish + ECB dovish = SHORT EUR/USD. Fed dovish + ECB hawkish = LONG. Both hawkish = choppy, lean WAIT.
-- US data stronger than EU = SHORT. EU data stronger than US = LONG.
-- Price above 200 EMA = bullish bias; below = bearish bias.
-
-8-STEP SCORECARD:
-1. PRICE vs VWAP & EMAs: above VWAP and above 50/200 EMA = PASS LONG; below all = PASS SHORT; mixed = NEUTRAL.
-2. MACD 1h/4h: both above signal = PASS LONG; both below = PASS SHORT; split = NEUTRAL.
-3. RSI 1h/4h: 50-70 + uptrend = PASS LONG; 30-50 + downtrend = PASS SHORT; >70 or <30 = NEUTRAL.
-4. DXY (most important): DXY falling = PASS LONG; rising = PASS SHORT. This step carries extra weight.
-5. FED vs ECB: divergence favouring EUR = PASS LONG; favouring USD = PASS SHORT; aligned/unclear = NEUTRAL.
-6. DATA: EU data beats US = PASS LONG; US beats EU = PASS SHORT; nothing notable = NEUTRAL.
-7. LEVELS/PIVOTS: within 0.1% of pivot support (LONG) or resistance (SHORT) = PASS; mid-range = FAIL.
-8. NEWS/RISK: risk-on / EUR-supportive = PASS; risk-off / USD-supportive = FAIL; unclear = NEUTRAL.
+10-STEP SCORECARD RULES:
+1. PRICE & VWAP/SESSION: upper/lower third of the 24h range AND above/below VWAP, ideally in the US cash session → same direction = PASS.
+2. MACD MULTI-TF: 1h+4h+Daily all above signal = PASS LONG; all below = PASS SHORT; 2/3 = NEUTRAL; 1/3 or 0/3 = FAIL.
+3. RSI + 200MA (STANDARD 70/30 — equities are NOT gold): RSI 50-70 + price above 200MA = PASS LONG; RSI 30-50 + below 200MA = PASS SHORT; >70 overbought or <30 oversold = NEUTRAL for entry. Use 70/30 as the extremes — do NOT use gold's 80/20 here.
+4. VIX + FED: VIX falling + dovish/steady Fed = PASS LONG; VIX rising + hawkish Fed = PASS SHORT; conflict = NEUTRAL. VIX >25 caps confidence at MEDIUM.
+5. COT (S&P 500 futures): if positioning data is provided, use it (crowded asset-manager longs = caution for new longs); if marked unavailable, score NEUTRAL — do NOT invent positioning.
+6. LEVELS: price within 0.3% of key structural support (LONG) or resistance (SHORT) = PASS; middle of range = FAIL.
+7. REGIME/STRUCTURE: the pre-computed 4h structure + ADX agrees with the trade direction = PASS; ranging or conflicting = NEUTRAL/FAIL.
+8. NEWS/MACRO: confirmed bullish catalyst / risk-on = PASS; bearish / risk-off / earnings landmine = FAIL; unclear = NEUTRAL.
 
 SIGNAL RULES:
-- Binary event (ECB/FOMC/US CPI/NFP/Eurozone CPI) UPCOMING within the next 24h → WAIT. Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend (use POST-NFP guidance when provided).
-- ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
-- MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
-- A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
-- SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH..
-- DXY step conflicting with MACD/price → cap confidence at MEDIUM.
-- Asian session with no catalyst → cap confidence at MEDIUM.
-- Stop: use the ATR-based pip value provided. T1 min 1.5× ATR, T2 min 2.5× ATR. R:R <1:2 → WAIT.
+- Binary event (FOMC/CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. An already-RELEASED event does NOT force WAIT once 30+ minutes have passed — trade the post-event trend normally. Never output wait_type binary_event for a past release.
+- ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → the direction at LOW confidence rather than a blanket WAIT.
+- MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW. Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
+- OVERNIGHT GAP RISK: index CFDs gap on the reopen — a stop can be jumped through. In pre-market / overnight, cap confidence at MEDIUM and explicitly note the gap risk in the reasoning.
+- VIX >25 → cap confidence at MEDIUM (elevated volatility). Earnings season → note mega-cap event risk.
+- SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH.
+- Stop: use the ATR-based value provided (1.5× 4h ATR). Do not widen it. T1 min 1.5× ATR, T2 min 2.5× ATR. R:R <1:2 → WAIT.
+- POSITION SIZING: the exact €/point value for the US500 CFD at minimum lot size is a PLACEHOLDER the user must confirm with Pepperstone — remind them in the reasoning; do NOT assume a € value.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"1.XXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXX","entry_note":"brief","stop":"1.XXXX","stop_note":"1.5x ATR","stop_pct":"45 pips","t1":"1.XXXX","t2":"1.XXXX","rr":"1:2.5","high_24h":"1.XXXX","low_24h":"1.XXXX","vwap":"1.XXXX","ema50":"1.XXXX","ema200":"1.XXXX","pivot":"1.XXXX","support":"1.XXXX","resistance":"1.XXXX","dxy":"XXX.XX — falling","dxy_nfp":"post-NFP DXY reaction or empty","rate_diff":"Fed > ECB by ~2%","fed_bias":"hawkish hold","ecb_bias":"dovish","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rates":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"data":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 X.XXXX — close 50% move stop to entry","T2 X.XXXX — close rest","Stop X.XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
+{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"1.5x ATR","stop_pct":"0.8","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","vix":"XX.X — rising|falling","fed_expectations":"e.g. 25bp cut ~60% priced for next FOMC","cot_net":"value or empty","cot_sentiment":"NEUTRAL or unavailable","earnings_flag":"season note or empty","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"vix_fed":{"r":"PASS|FAIL|NEUTRAL","note":"VIX level + direction"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"or unavailable"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"regime":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 XXXX — close 50% move stop to entry","T2 XXXX — close rest","Stop XXXX — full exit","Time — close by session end (gap risk)"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
-  pipeline: async ({ keys, addLog, postNfp }) => {
+  pipeline: async ({ keys, addLog }) => {
+    let symbol = null;
     const tdCandles = async (interval, outputsize=100) => {
-      const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
+      const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
       if(d?.status==="error") throw new Error(`Twelve Data: ${d.message}`);
       const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
-    // Returns latest value + direction vs the prior reading (we already fetch 5
-    // observations — direction was being thrown away, yet the scorecard rules on it).
-    const fred = async s => { const r=await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
+    const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
 
-    addLog("Fetching EUR/USD spot...");
+    // ── Resolve the working Twelve Data symbol (SPX → ES → US500 → GSPC) ──
+    addLog("Resolving US500 symbol (SPX → ES → US500 → GSPC)...");
+    if(keys.td){
+      for(const sym of US500_SYMBOLS){
+        try{
+          const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1h&outputsize=3&apikey=${keys.td}`, addLog);
+          if(d?.values?.length && parseFloat(d.values[0].close)>100){ symbol=sym; break; }
+        }catch(_){}
+      }
+    }
+    if(symbol) addLog(`✓ Twelve Data symbol in use: ${symbol}`);
+    else addLog("⚠ No Twelve Data symbol returned valid S&P data — a TD key is required for US500 index data");
+
     let spot=null;
-    if(keys.td) try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>0.5) spot={price:p5(d.price),src:"Twelve Data"}; }catch(_){}
-    if(!spot) try{ const r=await fetch("https://open.er-api.com/v6/latest/EUR"); if(r.ok){const d=await r.json();const px=d?.rates?.USD;if(px>0.5) spot={price:p5(px),src:"open.er-api"};} }catch(_){}
-    if(!spot) try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=eur"); if(r.ok){const d=await r.json();const e=d?.tether?.eur;if(e>0.5) spot={price:p5(1/e),src:"CoinGecko USDT/EUR"};} }catch(_){}
-    if(!spot) throw new Error("Could not fetch EUR/USD price from any source.");
-    addLog(`Spot: ${spot.price} (${spot.src})`);
+    if(symbol){ try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>100) spot={price:p2(d.price),src:`Twelve Data (${symbol})`}; }catch(_){} }
 
     let td=null, ta=null;
-    if(keys.td){ try{
+    if(symbol){ try{
       addLog("Fetching 15m/1h/4h/daily candles in parallel...");
-      // allSettled so one failed timeframe doesn't drop the others
-      const settled=await Promise.allSettled([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",250),tdCandles("1day",30)]);
+      const settled=await Promise.allSettled([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",100),tdCandles("1day",210)]);
       const [c15,c1h,c4h,c1d]=settled.map(r=>r.status==="fulfilled"?r.value:null);
       settled.forEach((r,i)=>{ if(r.status==="rejected") addLog(`${["15m","1h","4h","daily"][i]} candles failed: ${r.reason?.message||r.reason}`); });
+      if(!spot&&c1h&&c1h.closes.length){ spot={price:p2(c1h.closes[c1h.closes.length-1]),src:`Twelve Data candle (${symbol})`}; }
       if(c1h&&c4h){
-        const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes);
+        const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
         const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
-        const ema50_1h=calcEMAlast(c1h.closes,50);
-        const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes);
-        const ema50=calcEMAlast(c4h.closes,50), ema200=calcEMAlast(c4h.closes,200);
-        const pv=c1d&&c1d.closes.length>=2?calcPivots(c1d.highs[c1d.closes.length-2],c1d.lows[c1d.closes.length-2],c1d.closes[c1d.closes.length-2]):null;
+        const vol1h=calcVolRatio(c1h.volumes);
+        const macd4h=calcMACD(c4h.closes), rsi4h=calcRSI(c4h.closes), atr4h=calcATR(c4h.highs,c4h.lows,c4h.closes), vol4h=calcVolRatio(c4h.volumes);
+        const ma200=c1d?calcSMA(c1d.closes,200):null, macdD=c1d?calcMACD(c1d.closes):null, rsiD=c1d?calcRSI(c1d.closes):null, volD=c1d?calcVolRatio(c1d.volumes):null;
+        const dailyAtr=c1d?calcATR(c1d.highs,c1d.lows,c1d.closes):null;
         const h24=Math.max(...c1h.highs.slice(-24)), l24=Math.min(...c1h.lows.slice(-24));
-        // daily range exhaustion: today's pips vs 20-day avg range
-        const todayPips=Math.round((h24-l24)*10000);
-        let avgPips=null, rangeUsed=null;
-        if(c1d&&c1d.highs.length>=21){ const avgRange=c1d.highs.slice(-21,-1).map((h,i)=>h-c1d.lows.slice(-21,-1)[i]).reduce((a,b)=>a+b,0)/20; avgPips=Math.round(avgRange*10000); rangeUsed=avgPips?Math.round(todayPips/avgPips*100):null; }
-        // Asian session range (00:00-08:00 UTC of the most recent day) → break = trigger
-        let asianHigh=null, asianLow=null;
-        if(c1h.times){ const rows=c1h.times.map((t,i)=>({hr:+(t.slice(11,13)),day:t.slice(0,10),h:c1h.highs[i],l:c1h.lows[i]})).filter(r=>r.hr>=0&&r.hr<8);
-          if(rows.length){ const d0=rows[rows.length-1].day, a=rows.filter(r=>r.day===d0); asianHigh=Math.max(...a.map(r=>r.h)); asianLow=Math.min(...a.map(r=>r.l)); } }
+        const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
         const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
         const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
-        const vol1h=calcVolRatio(c1h.volumes);
         const li1=c1h.closes.length-1;
         const trNow=Math.max(c1h.highs[li1]-c1h.lows[li1],Math.abs(c1h.highs[li1]-c1h.closes[li1-1]),Math.abs(c1h.lows[li1]-c1h.closes[li1-1]));
         const atr20=calcATR(c1h.highs,c1h.lows,c1h.closes,20);
         const volRatio=atr20?p2(trNow/atr20):null;
-        let nfpMove=null, nfpLarge=false;
-        if(postNfp?.active&&c1h.times){
-          const day=new Date().toISOString().slice(0,10);
-          const idx=c1h.times.findIndex(t=>String(t).slice(0,10)===day&&String(t).slice(11,13)==="12");
-          if(idx>=0){ nfpMove=Math.round((spot.price-c1h.opens[idx])*10000); nfpLarge=Math.abs(nfpMove)>40; }
-        }
-        const volFading=vol1h&&c1h.volumes[li1]<c1h.volumes[li1-1]&&vol1h.average&&(c1h.volumes[li1-1]/vol1h.average)>1.5;
-        td={ macd1h,rsi1h,vwap,ema50_1h, macd4h,rsi4h,atr4h,ema50,ema200, pivots:pv, h24,l24, todayPips,avgPips,rangeUsed, asianHigh,asianLow, pdh,pdl, vol1h,volRatio,nfpMove,nfpLarge,volFading };
+        // overnight gap: distance from prior daily close to the current day's first candle open
+        let gap=null;
+        if(c1d&&c1d.closes.length>=2){ const prevClose=c1d.closes[c1d.closes.length-2]; if(prevClose) gap=p2(((spot.price-prevClose)/prevClose)*100); }
+        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24, pdh,pdl, volRatio,gap, bullMacd:bull, bearMacd:3-bull };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
-        addLog(`1h RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
+        addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
-    let macro={dxy:null,fedfunds:null,dgs10:null};
+    if(!spot) throw new Error("Could not fetch US500 price — a Twelve Data key is required for S&P 500 index data.");
+    addLog(`Spot: ${spot.price} (${spot.src})`);
+
+    // ── Rates / Fed expectations — reuse Gold's FRED series (Section 1) ──
+    let macro={dgs10:null,dgs10Dir:"unknown",fedfunds:null,realYield:null};
     if(keys.fred){ try{
-      addLog("Fetching FRED DXY + Fed funds + 10Y in parallel...");
-      const [dxy,fedfunds,dgs10]=await Promise.all([fred("DTWEXBGS"),fred("FEDFUNDS"),fred("DGS10")]);
-      macro.dxy=dxy.v; macro.dxyDir=dxy.dir; macro.fedfunds=fedfunds.v; macro.dgs10=dgs10.v; macro.dgs10Dir=dgs10.dir;
-      addLog(`FRED → DXY:${macro.dxy} (${macro.dxyDir}) FedFunds:${macro.fedfunds}% 10Y:${macro.dgs10}% (${macro.dgs10Dir})`);
+      addLog("Fetching FRED 10Y + real yield + Fed funds...");
+      const [dgs10,tips,fedfunds]=await Promise.all([fred("DGS10"),fred("T10YIE"),fred("FEDFUNDS")]);
+      macro.dgs10=dgs10.v; macro.dgs10Dir=dgs10.dir; macro.fedfunds=fedfunds.v;
+      if(dgs10.v!=null&&tips.v!=null) macro.realYield=p2(dgs10.v-tips.v);
+      addLog(`FRED → 10Y:${macro.dgs10}% (${macro.dgs10Dir}) real:${macro.realYield}% FedFunds:${macro.fedfunds}%`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
-    const session=getFxSession();
-    const atr=td?.atr4h??null;
-    const stopMult=postNfp?.active?1.2:1.5; // post-NFP: 20% tighter
-    const stopAmt=atr?p5(atr*stopMult):null;
-    const stopPips=stopAmt?Math.round(stopAmt*10000):null;
+    // ── COT-equivalent: CFTC Traders in Financial Futures (S&P 500). Best-effort;
+    //    marks NEUTRAL/unavailable gracefully if the feed shape differs (Section 1). ──
+    addLog("Fetching COT (CFTC TFF — E-mini S&P 500)...");
+    let cot=null;
+    try{
+      // Section 6: verified TFF dataset (yw9f-hn96) + the main E-MINI S&P 500
+      // contract. Asset managers are structurally long (benchmark hedging), so the
+      // speculative read comes from LEVERAGED FUNDS — extreme net short can precede
+      // squeezes. Falls through to "unavailable" (NEUTRAL) if the shape ever differs.
+      const r=await fetch("https://publicreporting.cftc.gov/resource/yw9f-hn96.json?$limit=1&$order=report_date_as_yyyy_mm_dd%20DESC&$where=contract_market_name=%27E-MINI%20S%26P%20500%27");
+      if(r.ok){ const d=await r.json(); if(d.length){ const lat=d[0];
+        const amL=parseInt(lat.asset_mgr_positions_long||0), amS=parseInt(lat.asset_mgr_positions_short||0), amNet=amL-amS;
+        const lmL=parseInt(lat.lev_money_positions_long||0), lmS=parseInt(lat.lev_money_positions_short||0), lmNet=lmL-lmS;
+        if(amL||amS||lmL||lmS){ cot={ net:amNet, levNet:lmNet, reportDate:lat.report_date_as_yyyy_mm_dd,
+          sentiment:lmNet>0?"Leveraged funds NET LONG":lmNet<0?"Leveraged funds NET SHORT":"NEUTRAL" }; }
+      } }
+    }catch(_){}
+    addLog(cot?`COT → net:${cot.net?.toLocaleString()} ${cot.sentiment}`:"COT unavailable (scored NEUTRAL)");
+
+    const session=getUS500Session();
+    const atr=td?.atr4h??td?.atr1h??null;
+    const stopAmt=atr?p2(atr*1.5):null, stopPct=stopAmt?p2((stopAmt/spot.price)*100):null;
+    const earn=earningsFlag();
 
     const pkg=`=== PRE-COMPUTED MARKET DATA — DO NOT RE-FETCH ===
 
 PRICE
-  EUR/USD Spot: ${spot.price} (${spot.src})
-  24h High: ${ff(td?.h24)} | 24h Low: ${ff(td?.l24)}
-  VWAP (23h): ${ff(td?.vwap)} → price ${td?.vwap?(spot.price>td.vwap?"ABOVE":"BELOW")+" VWAP":"unknown"}
-  Session: ${session.label}
+  US500 (S&P 500) Spot: ${spot.price} (${spot.src})
+  24h High: ${na(td?.h24)} | 24h Low: ${na(td?.l24)}
+  VWAP (23h): ${f2(td?.vwap)} → price ${td?.vwap?(spot.price>td.vwap?"ABOVE — bullish intraday":"BELOW — bearish intraday"):"unknown"}
+  Session: ${session.label} (${session.quality})${td?.gap!=null?` | Overnight gap vs prior close: ${td.gap>0?"+":""}${td.gap}%${Math.abs(td.gap)>0.5?" — GAP RISK, a stop can be jumped":""}`:""}
 
-EMAs (4h)  50 EMA:${ff(td?.ema50)} | 200 EMA:${ff(td?.ema200)} → price ${td?.ema200?(spot.price>td.ema200?"ABOVE 200EMA (bull bias)":"BELOW 200EMA (bear bias)"):"unknown"}
+MACD — THREE TIMEFRAMES
+  1h:    line=${f3(td?.macd1h?.macd)} hist=${f3(td?.macd1h?.histogram)} | ${td?.macd1h?.aboveSignal?"ABOVE":"BELOW"} signal
+  4h:    line=${f3(td?.macd4h?.macd)} hist=${f3(td?.macd4h?.histogram)} | ${td?.macd4h?.aboveSignal?"ABOVE":"BELOW"} signal ${td?.macd4h?.expanding?"(expanding)":"(contracting)"}
+  Daily: line=${f3(td?.macdD?.macd)} hist=${f3(td?.macdD?.histogram)} | ${td?.macdD?.aboveSignal?"ABOVE":"BELOW"} signal
+  Alignment: ${td?`${td.bullMacd}/3 bullish, ${td.bearMacd}/3 bearish${td.bullMacd===3?" — ALL BULLISH (strong)":td.bearMacd===3?" — ALL BEARISH (strong)":""}`:"unavailable"}
 
-MACD  1h: line=${ff(td?.macd1h?.macd)} ${td?.macd1h?.aboveSignal?"ABOVE":"BELOW"} signal | 4h: line=${ff(td?.macd4h?.macd)} ${td?.macd4h?.aboveSignal?"ABOVE":"BELOW"} signal ${td?.macd4h?.expanding?"(expanding)":"(contracting)"}
+RSI (14, STANDARD EQUITY BANDS 70/30)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)} | Daily:${f1(td?.rsiD)}${rsiLbl(td?.rsiD)}
+  (equities use standard 70/30 — do NOT apply gold's 80/20 here)
+  200MA: ${f2(td?.ma200)} → price ${td?.ma200?(spot.price>td.ma200?"ABOVE (bull regime)":"BELOW (bear regime)"):"unknown"}
 
-RSI (14)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)}
+VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h.ratio):"n/a"} | 4h:${td?.vol4h?td.vol4h.ratio.toFixed(2)+"x"+volLbl(td.vol4h.ratio):"n/a"}
 
-PIVOTS (from prior daily candle)  P:${ff(td?.pivots?.P)} | R1:${ff(td?.pivots?.R1)} R2:${ff(td?.pivots?.R2)} | S1:${ff(td?.pivots?.S1)} S2:${ff(td?.pivots?.S2)}
-  PDH:${ff(td?.pdh)} | PDL:${ff(td?.pdl)} (previous-day high/low — watched liquidity levels)
+ATR & STOP  1h:${f2(td?.atr1h)} | 4h:${f2(td?.atr4h)} | Recommended stop: ${na(stopAmt)} pts (${na(stopPct)}%, 1.5x 4h ATR)
+  Daily ATR:${f2(td?.dailyAtr)} points
 
-ATR & STOP (4h)  ATR:${ff(td?.atr4h)} | Recommended stop: ${ff(stopAmt)} (${stopPips??"~50"} pips, 1.5x ATR)
+RATES / FED — FRED  10Y Treasury:${na(macro.dgs10)}% ${macro.dgs10Dir||""} (rising yields pressure equity valuations) | Real yield:${na(macro.realYield)}% | Fed Funds:${na(macro.fedfunds)}%
+  (Use web search for the current Fed rate-cut/hike expectations and next-FOMC bias to complete the VIX+Fed scorecard row.)
 
-MACRO — FRED  DXY (Fed TWI):${na(macro.dxy)} ${macro.dxyDir||""} | Fed Funds:${na(macro.fedfunds)}% | US 10Y:${na(macro.dgs10)}% ${macro.dgs10Dir||""}
-  (DXY direction is computed locally vs the prior reading — scorecard rule 4 uses it directly: DXY FALLING = PASS LONG, RISING = PASS SHORT. DXY is ~95% inverse to EUR/USD. Use web search for ECB policy rate & latest decisions to compute the Fed-vs-ECB differential.)
+VIX — NOT pre-fetched. Search "VIX level today CBOE" and set vix. Rising VIX = risk-off (bearish), falling = risk-on (bullish). >25 reduce size / cap confidence; <15 complacency warning.
 
-EUR/USD CONTEXT  50 EMA (1h):${ff(td?.ema50_1h)} → price ${td?.ema50_1h?(spot.price>td.ema50_1h?"ABOVE (short-term bullish)":"BELOW (short-term bearish)"):"unknown"}
-  Asian range (00-08 UTC): high ${ff(td?.asianHigh)} / low ${ff(td?.asianLow)} → break above high = potential LONG trigger, break below low = potential SHORT trigger (use as watch_long/watch_short)
-  Daily range used: ${td?.rangeUsed!=null?`${td.rangeUsed}% (${td.todayPips}/${td.avgPips} pips avg)`+(td.rangeUsed>80?" — RANGE EXHAUSTED, avoid new entries":""):"n/a"}
-  Session note: Asian (00-08 UTC) barely moves — ignore. London open (08-09) sets the range but often reverses — wait for 2nd candle. NY (13:30) often reverses London ("London close trap"). Best candles: 13-16 UTC overlap.
+COT — E-mini S&P 500 (CFTC TFF)  ${cot?`Asset-manager net:${cot.net?.toLocaleString()} (structurally long — benchmark hedging) | Leveraged-fund net:${cot.levNet?.toLocaleString()} → ${cot.sentiment} (report ${cot.reportDate}). Leveraged funds are the speculative crowd; extreme net short can precede short squeezes.`:"unavailable — score the COT row NEUTRAL, do not invent positioning"}
 
-${postNfp?.active?`
-POST-NFP WINDOW (${postNfp.sinceMin} min since the 12:30 UTC release)
-  ${postNfp.sinceMin>=30?`The 30-min chaos window has PASSED (${postNfp.sinceMin} min since release) — signal NORMALLY now with the tightened stop; do NOT output wait_type binary_event for this released event.`:`First 30 min are chaotic — most reliable signal after 13:00 UTC.`} Stop already tightened 20% (${stopMult}x ATR).
-  Move since NFP candle open: ${td?.nfpMove!=null?td.nfpMove+" pips":"n/a"}${td?.nfpLarge?" — LARGE MOVE ALREADY OCCURRED → prefer WAIT/pullback entries":""}
-  Volume context: ${td?.vol1h?(td.vol1h.ratio>3?"NFP volume spike — move is institutional, high conviction":td.vol1h.ratio>1.5?"Elevated volume — reliable signal":td.volFading?"Volume normalizing — initial reaction fading, cleaner entry forming":"normal volume"):"n/a"}
-  EXTRA TASK (one additional search): search "DXY dollar index NFP reaction today". If DXY up >0.3% set dxy_nfp to "DXY STRENGTHENING post-NFP — bearish EUR/USD bias confirmed (+X.X%)". If down >0.3% → "DXY WEAKENING post-NFP — bullish EUR/USD bias confirmed (-X.X%)". If flat → "DXY mixed post-NFP — rely on technicals for direction". Include the % change and a one-line analyst take.`:""}
-${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no Twelve Data key — score candles & mtf NEUTRAL)"}
+US500 CONTEXT  ${earn?`📊 ${earn}`:"No major earnings-season cluster right now"}
+  Round numbers (S&P respects 50/100-point levels near price) and PDH/PDL are universally watched.
+  PDH: ${f2(td?.pdh)} | PDL: ${f2(td?.pdl)} (previous-day high/low)
+  Session note: the US cash open (9:30 AM ET / 4:30 PM EGY) is the most reliable move of the day; pre-market & overnight are thin and gap-prone.
+  ⚠ POSITION SIZING: the €/point value for the US500 CFD at min lot size is a PLACEHOLDER — remind the user to confirm it with Pepperstone before sizing.
 
-=== YOUR JOB: search ECB/Fed guidance, CPI differential, data releases, key S/R, binary events → output JSON ===`;
+${ta?taPromptBlock(ta, v=>f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable (no candle data — score candles & mtf NEUTRAL)"}
 
-    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, stopPips, ta } };
+=== YOUR JOB: search VIX (required), news, Fed expectations, key S/R, binary events → output JSON ===`;
+
+    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, cot, stopAmt, stopPct, ta, earn, symbol } };
   },
   merge:(p,m)=>{
-    const { td, macro, ta } = m;
-    if(td?.h24&&!p.high_24h) p.high_24h=td.h24.toFixed(5);
-    if(td?.l24&&!p.low_24h)  p.low_24h=td.l24.toFixed(5);
-    if(td?.vwap&&!p.vwap)    p.vwap=td.vwap.toFixed(5);
-    if(td?.ema50)            p.ema50=td.ema50.toFixed(5);
-    if(td?.ema200)           p.ema200=td.ema200.toFixed(5);
-    if(td?.pivots?.P&&!p.pivot) p.pivot=td.pivots.P.toFixed(5);
-    if(td?.pdh!=null) p.pdh=td.pdh.toFixed(5);
-    if(td?.pdl!=null) p.pdl=td.pdl.toFixed(5);
-    if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=`${macro.dxy}${macro.dxyDir?` — ${macro.dxyDir.toLowerCase()}`:""}`;
+    const { td, macro, cot, ta, earn } = m;
+    if(td?.h24&&!p.high_24h) p.high_24h=String(td.h24);
+    if(td?.l24&&!p.low_24h)  p.low_24h=String(td.l24);
+    if(td?.ma200)            p.ma200=td.ma200.toFixed(2);
+    if(td?.vwap&&!p.vwap)    p.vwap=td.vwap.toFixed(2);
+    if(td?.pdh!=null)        p.pdh=td.pdh.toFixed(2);
+    if(td?.pdl!=null)        p.pdl=td.pdl.toFixed(2);
+    if(macro.realYield!==null) p.real_yield=`${macro.realYield}%${macro.dgs10!=null?` (10Y ${macro.dgs10}% ${macro.dgs10Dir?.toLowerCase()||""})`:""}`;
+    if(cot){ if(!p.cot_net) p.cot_net=cot.net?.toLocaleString(); if(!p.cot_sentiment||p.cot_sentiment==="") p.cot_sentiment=cot.sentiment; }
+    else if(!p.cot_sentiment||p.cot_sentiment==="") p.cot_sentiment="unavailable";
+    if((!p.earnings_flag||p.earnings_flag==="")&&earn) p.earnings_flag=earn;
     if(td?.volRatio!=null) p._volRatio=td.volRatio;
-    if(td?.nfpLarge) p._nfpLarge=true;
-    p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
-    mergeTA(p, ta, v=>v.toFixed(5));
+    p._sources=[...(ta?["Real OHLCV"]:[]),...((macro.dgs10!=null||macro.realYield!=null)?["FRED"]:[]),...(cot?["COT/TFF"]:[])];
+    mergeTA(p, ta, v=>v.toFixed(2));
   },
 };
 
@@ -598,8 +631,9 @@ const BTC = {
   theme:{ accent:"#f97316", accentText:"#fb923c", panelBg:"#271207", panelBorder:"#7c2d12", loader:"#f97316" },
   keyFields:[
     { field:"anthropic", label:"Anthropic API Key", hint:"required — powers the AI signal", ph:"sk-ant-..." },
+    { field:"glassnode", label:"Glassnode API Key", hint:"optional — adds exchange netflow + SOPR on-chain depth", ph:"(optional)" },
   ],
-  dataNote:"BTC technicals come from Binance + CoinGecko (free, no key). Only the Anthropic key is needed.",
+  dataNote:"BTC technicals + on-chain (blockchain.info) come from free no-key APIs. Only the Anthropic key is required; add a Glassnode key for netflow/SOPR depth.",
   session:getCryptoSession,
   quickPrice: async () => {
     try{ const r=await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"); if(r.ok){const d=await r.json();if(+d.price>1000) return {price:p2(d.price),src:"Binance"};} }catch(_){}
@@ -652,6 +686,7 @@ const BTC = {
     { name:"BB Lower (4h)", val:`$${fmt(s.bb_lower)}` },
   ],
   extraPanels:(s)=>(
+    <>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
       <div style={card}>
         <p style={lbl}>Derivatives — Binance</p>
@@ -668,6 +703,20 @@ const BTC = {
         <p style={{...mono,fontSize:12,margin:0,color:(()=>{const v=parseInt(s.fear_greed);return v<20?"#4ade80":v>80?"#f87171":"#94a3b8";})()}}>{fmt(s.fear_greed)} {(()=>{const v=parseInt(s.fear_greed);return v<20?"(Extreme Fear → contrarian LONG)":v>80?"(Extreme Greed → contrarian SHORT)":"";})()}</p></div>
       </div>
     </div>
+    {/* ON-CHAIN CONTEXT (Section 2) — supplementary, feeds AI reasoning */}
+    <div style={{...card,marginBottom:10}}>
+      <p style={lbl}>On-Chain Context <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· blockchain.info · supplementary</span></p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:6}}>
+        <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Miners' revenue</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_miners)}</p></div>
+        <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Transactions/day</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_ntx)}</p></div>
+        <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Hash rate</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_hash)}</p></div>
+      </div>
+      {s.oc_whale&&<p style={{fontSize:11,color:"#fb923c",...mono,margin:"0 0 4px"}}>🐋 Whale-sized transaction detected — {s.oc_whale}</p>}
+      {(s.oc_netflow||s.oc_sopr)
+        ? <p style={{fontSize:10,color:"#22d3ee",...mono,margin:0}}>Glassnode · netflow {fmt(s.oc_netflow)} · SOPR {fmt(s.oc_sopr)}</p>
+        : s.oc_gnode_missing&&<p style={{fontSize:10,color:"#475569",margin:0}}>On-chain depth unavailable — add a free Glassnode key in settings for exchange netflow + SOPR.</p>}
+    </div>
+    </>
   ),
   system:`You are SIGNAL DECK BITCOIN, a BTC/USD analysis engine for paper trading education only. Not financial advice. Never fabricate prices.
 
@@ -721,8 +770,10 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     };
 
     const jget = u => fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);
-    addLog("Fetching BTC market data in parallel (Binance + CoinGecko)...");
-    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, oiHistR, domR, fngR] = await Promise.all([
+    // blockchain.info charts (Section 2) — free, no key. cors=true for browser use.
+    const bcChart = c => jget(`https://api.blockchain.info/charts/${c}?timespan=8days&format=json&cors=true`);
+    addLog("Fetching BTC market + on-chain data in parallel (Binance + CoinGecko + blockchain.info)...");
+    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, oiHistR, domR, fngR, minersR, ntxR, hashR] = await Promise.all([
       jget("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"),
       klines("15m",100).catch(()=>null), klines("1h",100).catch(()=>null), klines("4h",100).catch(()=>null),
       klines("1d",220).catch(()=>null), klines("1w",2).catch(()=>null),
@@ -731,6 +782,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       jget("https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=4h&limit=2"),
       jget("https://api.coingecko.com/api/v3/global"),
       jget("https://api.alternative.me/fng/?limit=1"),
+      bcChart("miners-revenue"), bcChart("n-transactions"), bcChart("hash-rate"),
     ]);
 
     let spot=null, h24=null, l24=null, chg=null;
@@ -764,6 +816,32 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(fngR?.data?.[0]?.value){ fng=parseInt(fngR.data[0].value); fngLabel=fngR.data[0].value_classification; }
     addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"}(${oiTrend}) Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
 
+    // ── ON-CHAIN CONTEXT (Section 2): blockchain.info trends + whale flag + Glassnode ──
+    const bcLatest = r => { const v=r?.values; if(!Array.isArray(v)||!v.length) return null; const last=v[v.length-1]?.y, first=v[0]?.y; const dir=(last!=null&&first!=null)?(last>first*1.02?"RISING":last<first*0.98?"FALLING":"FLAT"):"unknown"; return { val:last, dir }; };
+    const miners=bcLatest(minersR), ntx=bcLatest(ntxR), hash=bcLatest(hashR);
+    addLog(`On-chain → miners rev:${miners?.val!=null?"$"+Math.round(miners.val).toLocaleString():"n/a"}(${miners?.dir||"?"}) tx/day:${ntx?.val!=null?Math.round(ntx.val).toLocaleString():"n/a"}(${ntx?.dir||"?"}) hash:${hash?.val!=null?hash.dir:"n/a"}`);
+    // Whale flag from EXISTING data (no new API): largest recent 15m candle's share of
+    // 24h volume. 15m ≈ 1% of a day, so a single candle >2% of daily volume is an
+    // outsized block. (Per-trade granularity would need a new API, which we avoid.)
+    let whale=null;
+    if(c15?.volumes?.length && tickerR?.volume){
+      const v24=parseFloat(tickerR.volume);
+      const recent=c15.volumes.slice(-8);
+      const maxV=Math.max(...recent);
+      const share=v24>0?maxV/v24:0;
+      if(share>0.02) whale={ pct:p2(share*100), note:"whale-sized transaction detected" };
+    }
+    // Optional Glassnode (user key) — exchange netflow + SOPR; skip gracefully if absent.
+    let gnode=null;
+    if(keys.glassnode){ try{
+      addLog("Fetching Glassnode netflow + SOPR...");
+      const gn = async metric => { const r=await fetch(proxyDataUrl("glassnode", `https://api.glassnode.com/v1/metrics/${metric}?a=BTC&api_key=${keys.glassnode}&i=24h`)); if(!r.ok) return null; const d=await r.json().catch(()=>null); return (Array.isArray(d)&&d.length)?d[d.length-1].v:null; };
+      const [netflow,sopr]=await Promise.all([gn("transactions/transfers_volume_exchanges_net"),gn("indicators/sopr")]);
+      if(netflow!=null||sopr!=null){ gnode={ netflow, sopr }; addLog(`Glassnode → netflow:${netflow!=null?Math.round(netflow).toLocaleString():"n/a"} SOPR:${sopr!=null?sopr.toFixed(3):"n/a"}`); }
+      else addLog("Glassnode returned no data (check key/plan)");
+    }catch(e){ addLog(`Glassnode error: ${e.message}`); } }
+    const onchain={ miners, ntx, hash, whale, gnode };
+
     const session=getCryptoSession();
     const atr=td?.atr4h??null;
     const stopAmt=atr?p2(atr*1.5):null, stopPct=stopAmt?p2((stopAmt/spot.price)*100):null;
@@ -794,15 +872,31 @@ ATR & STOP (4h)  ATR:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na
 BTC CONTEXT  Weekly candle: ${td?.weeklyDir||"n/a"} (first weekly candle has 60%+ predictive value for the week) | Whale wick (4h): ${td?.whaleWick||"none"}
   Funding+pattern combo: funding ${funding!=null?funding.toFixed(4)+"%":"n/a"} ${funding>0.1?"+ bearish candle at resistance = STRONG SHORT":funding<-0.05?"+ bullish candle at support = STRONG LONG":""}. 4h volume >300% avg = institutional move, weight heavily.
 
+ON-CHAIN CONTEXT (blockchain.info — SUPPLEMENTARY context feeding your reasoning alongside funding/OI, NOT a standalone gate)
+  Miners' revenue: ${miners?.val!=null?"$"+Math.round(miners.val).toLocaleString():"n/a"} (${miners?.dir||"?"} vs last week — sharply falling can pressure price via miner selling/capitulation)
+  Transactions/day: ${ntx?.val!=null?Math.round(ntx.val).toLocaleString():"n/a"} (${ntx?.dir||"?"} — rising = network usage/demand increasing, supportive)
+  Hash rate: ${hash?.val!=null?hash.val.toExponential(2):"n/a"} (${hash?.dir||"?"} — rising = miner confidence/network security up)
+  Whale activity: ${whale?`⚠ ${whale.note} — a single 15m candle carried ${whale.pct}% of 24h volume (outsized block, possible whale/institutional print)`:"no outsized single-candle volume burst detected in the last 2h"}
+  ${gnode?`Glassnode → Exchange netflow: ${gnode.netflow!=null?Math.round(gnode.netflow).toLocaleString()+" BTC (negative = net OUTFLOW → bullish accumulation; positive = net INFLOW → potential selling)":"n/a"} | SOPR: ${gnode.sopr!=null?gnode.sopr.toFixed(3)+(gnode.sopr>1?" (>1 → holders realizing profit)":gnode.sopr<1?" (<1 → coins moving at a loss, capitulation)":""):"n/a"}`:"On-chain depth (exchange netflow, SOPR) unavailable — add a free Glassnode key in settings for this data."}
+
 ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable — score candles & mtf NEUTRAL"}
 
 === YOUR JOB: search BTC spot ETF daily flows (IBIT/FBTC — MOST IMPORTANT), whale/on-chain, regulatory news, Nasdaq/VIX risk tone, key round-number S/R, binary events → output JSON ===`;
 
     return { pkg, price:spot.price, src:spot.src, session,
-      meta:{ td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta } };
+      meta:{ td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta, onchain } };
   },
   merge:(p,m)=>{
-    const { td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta } = m;
+    const { td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta, onchain } = m;
+    if(onchain){
+      const oc=onchain;
+      if(oc.miners?.val!=null) p.oc_miners=`$${Math.round(oc.miners.val).toLocaleString()} · ${oc.miners.dir?.toLowerCase()}`;
+      if(oc.ntx?.val!=null)    p.oc_ntx=`${Math.round(oc.ntx.val).toLocaleString()}/day · ${oc.ntx.dir?.toLowerCase()}`;
+      if(oc.hash?.val!=null)   p.oc_hash=`${oc.hash.dir?.toLowerCase()}`;
+      if(oc.whale)             p.oc_whale=`${oc.whale.pct}% of 24h vol in one 15m candle`;
+      if(oc.gnode){ if(oc.gnode.netflow!=null) p.oc_netflow=`${Math.round(oc.gnode.netflow).toLocaleString()} BTC`; if(oc.gnode.sopr!=null) p.oc_sopr=oc.gnode.sopr.toFixed(3); }
+      else p.oc_gnode_missing=true;
+    }
     if(h24!=null&&!p.high_24h) p.high_24h=String(h24);
     if(l24!=null&&!p.low_24h)  p.low_24h=String(l24);
     if(td?.sma200)             p.sma200=td.sma200.toFixed(2);
@@ -818,4 +912,4 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
   },
 };
 
-export const ASSETS = { gold:GOLD, eur:EUR, btc:BTC };
+export const ASSETS = { gold:GOLD, us500:US500, btc:BTC };

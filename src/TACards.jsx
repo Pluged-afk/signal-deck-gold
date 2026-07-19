@@ -1,12 +1,19 @@
 import { mono, card, lbl } from "./shared";
+import { PULLBACK_ZONES } from "./ta";
 
 // New technical-analysis cards (all from locally-computed sig._ta):
 // signal quality, candle-pattern alert, multi-timeframe table, Fibonacci,
-// pullback meter, and entry options. Renders nothing if no TA was computed.
+// tiered pullback meter, and entry options. Renders nothing if no TA was computed.
 const trendCol = t => t === "BULL" ? "#4ade80" : t === "BEAR" ? "#f87171" : "#94a3b8";
 const sigCol = s => /LONG/.test(s) ? "#4ade80" : /SHORT/.test(s) ? "#f87171" : "#94a3b8";
 const volCol = v => v === "HIGH" ? "#4ade80" : v === "LOW" ? "#f87171" : "#94a3b8";
-const stateCol = s => s === "SHALLOW" ? "#4ade80" : s === "NORMAL" ? "#fbbf24" : s === "DEEP" ? "#fb923c" : "#f87171";
+const stateCol = s => (PULLBACK_ZONES.find(z => z.state === s) || {}).color || "#94a3b8";
+// Tiered-zone advice text (Section 3a)
+const ZONE_ADVICE = {
+  "SHALLOW": "Normal pullback — hold.", "NORMAL": "Healthy retrace — hold, watch.",
+  "MODERATE": "Momentum test — watch closely.", "DEEP": "Reversal risk — tighten stop.",
+  "SEVERE": "Likely reversal — consider exit.", "FULL REVERSAL": "Trend broken — exit.",
+};
 const qCol = l => l === "VERY HIGH" || l === "HIGH" ? "#4ade80" : l === "MEDIUM" ? "#fbbf24" : "#f87171";
 const dirCol = d => d === "bullish" ? "#4ade80" : d === "bearish" ? "#f87171" : "#94a3b8";
 
@@ -84,17 +91,34 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2 }) {
           <p style={{ fontSize: 10, color: "#64748b", margin: "6px 0 0" }}>price {ta.fib.position}{ta.fib.atLevel ? ` — AT ${ta.fib.atLevel}` : ""}</p>
         </div>
         <div style={card}>
-          <p style={lbl}>Pullback Meter</p>
+          <p style={lbl}>Pullback Meter <span style={{ color: "#475569", fontSize: 9, fontWeight: 400 }}>· 6 tiered zones</span></p>
           {ta.pull ? (<>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
               <span style={{ ...mono, fontSize: 18, fontWeight: 700, color: stateCol(ta.pull.state) }}>{ta.pull.pct.toFixed(0)}%</span>
               <span style={{ ...mono, fontSize: 11, color: stateCol(ta.pull.state), alignSelf: "flex-end" }}>{ta.pull.state}</span>
             </div>
-            <div style={{ height: 10, background: "#020617", borderRadius: 6, overflow: "hidden", position: "relative" }}>
-              <div style={{ width: `${Math.min(100, ta.pull.pct)}%`, height: "100%", background: stateCol(ta.pull.state), transition: "width 0.4s" }} />
-            </div>
-            <p style={{ fontSize: 10, color: "#475569", margin: "8px 0 0", lineHeight: 1.5 }}>
-              {ta.pull.dir}-move retrace. {ta.pull.state === "SHALLOW" ? "Normal pullback — hold." : ta.pull.state === "NORMAL" ? "Watch closely." : ta.pull.state === "DEEP" ? "Reversal risk." : "EXIT — reversal likely."}
+            {/* Segmented 6-band bar with a marker at the current retracement */}
+            {(() => {
+              const TAIL = 15, TOTAL = 100 + TAIL; // compress the >100% FULL-REVERSAL tail
+              const p = ta.pull.pct;
+              const units = p <= 100 ? p : 100 + Math.min(1, (p - 100) / 50) * TAIL;
+              const markerLeft = Math.max(0, Math.min(100, units / TOTAL * 100));
+              return (
+                <div style={{ position: "relative", paddingTop: 7 }}>
+                  <div style={{ position: "absolute", top: 0, left: `${markerLeft}%`, transform: "translateX(-50%)", fontSize: 9, color: "#e2e8f0", lineHeight: 1 }}>▼</div>
+                  <div style={{ display: "flex", height: 12, borderRadius: 6, overflow: "hidden", border: "1px solid #1e293b" }}>
+                    {PULLBACK_ZONES.map(z => {
+                      const span = z.state === "FULL REVERSAL" ? TAIL : (z.hi - z.lo);
+                      const active = ta.pull.state === z.state;
+                      return <div key={z.state} title={`${z.state} ${z.lo}–${z.hi === 150 ? "100+" : z.hi}%`} style={{ flex: span, background: z.color, opacity: active ? 1 : 0.25, borderRight: "1px solid #020617" }} />;
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+            <p style={{ fontSize: 8, color: "#475569", margin: "4px 0 0", ...mono }}>0 · 23.6 · 38.2 · 50 · 61.8 · 100+</p>
+            <p style={{ fontSize: 10, color: "#475569", margin: "6px 0 0", lineHeight: 1.5 }}>
+              {ta.pull.dir}-move retrace. {ZONE_ADVICE[ta.pull.state] || ""}
             </p>
           </>) : <p style={{ fontSize: 11, color: "#475569" }}>No clear swing on 1h.</p>}
         </div>

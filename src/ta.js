@@ -10,8 +10,20 @@
 //   • volume classification
 //   • signal-quality score 0–100
 // ═══════════════════════════════════════════════════════════════════════════
-import { calcEMA, calcEMAlast, calcATR } from "./shared";
-import { bollinger } from "./scalp";
+import { calcEMA, calcEMAlast, calcATR, bollinger } from "./shared";
+
+// ─── Tiered pullback zones (Section 3a) — one shared band model ──────────────
+// Retracement %, banded into six zones. Used by both the local pullback analysis
+// and the segmented Pullback Meter so the labels never drift apart.
+export const PULLBACK_ZONES = [
+  { state: "SHALLOW",       lo: 0,     hi: 23.6, color: "#4ade80" },
+  { state: "NORMAL",        lo: 23.6,  hi: 38.2, color: "#a3e635" },
+  { state: "MODERATE",      lo: 38.2,  hi: 50,   color: "#fbbf24" },
+  { state: "DEEP",          lo: 50,    hi: 61.8, color: "#fb923c" },
+  { state: "SEVERE",        lo: 61.8,  hi: 100,  color: "#f87171" },
+  { state: "FULL REVERSAL", lo: 100,   hi: 150,  color: "#dc2626" },
+];
+export const pullbackZone = pct => PULLBACK_ZONES.find(z => pct < z.hi) || PULLBACK_ZONES[PULLBACK_ZONES.length - 1];
 
 // Bollinger regime on 4h (20, 2SD) — reuses the scalp BB math. Compares the
 // current band width to its recent average to classify squeeze vs trending.
@@ -177,10 +189,10 @@ export const analyzePullback = (highs, lows, closes) => {
   let dir, retrace;
   if (shI > slI) { dir = "up"; retrace = (sh - price) / range; }
   else { dir = "down"; retrace = (price - sl) / range; }
-  retrace = Math.max(0, Math.min(1.2, retrace));
+  retrace = Math.max(0, Math.min(1.5, retrace)); // allow >100% for FULL REVERSAL
   const pct = retrace * 100;
-  const state = pct < 38.2 ? "SHALLOW" : pct < 50 ? "NORMAL" : pct < 61.8 ? "DEEP" : "REVERSAL";
-  return { dir, pct, state, swingHigh: sh, swingLow: sl };
+  const zone = pullbackZone(pct);
+  return { dir, pct, state: zone.state, color: zone.color, swingHigh: sh, swingLow: sl };
 };
 
 // ─── volume classification ───────────────────────────────────────────────────
@@ -318,8 +330,8 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
     pattern: keyPattern ? c1h.closes[c1h.closes.length - 1] : null,
     conservative: "wait for 15m close in trend direction",
     recommended: keyPattern && (nearRes || nearSup) ? "Pattern"
-      : pull && pull.state === "SHALLOW" ? "Optimal (fib 38.2%)"
-        : pull && (pull.state === "DEEP" || pull.state === "REVERSAL") ? "Conservative"
+      : pull && (pull.state === "SHALLOW" || pull.state === "NORMAL") ? "Optimal (fib 38.2%)"
+        : pull && (pull.state === "DEEP" || pull.state === "SEVERE" || pull.state === "FULL REVERSAL") ? "Conservative"
           : "Aggressive",
   };
 
@@ -413,7 +425,7 @@ FIBONACCI (from 4h swing, last 50)  High:${f(ta.fib.high)} Low:${f(ta.fib.low)}
   23.6%:${f(fl[0.236])} | 38.2%:${f(fl[0.382])}★ | 50%:${f(fl[0.5])} | 61.8%:${f(fl[0.618])}★ | 78.6%:${f(fl[0.786])}
   price ${ta.fib.position}${ta.fib.atLevel ? ` — AT ${ta.fib.atLevel}` : ""}
 
-PULLBACK (1h)  ${ta.pull ? `${ta.pull.pct.toFixed(0)}% retraced → ${ta.pull.state} (${ta.pull.dir}-move). <38% shallow/hold, 38-50 normal, 50-61.8 reversal risk, >61.8 likely reversal/exit` : "no clear swing"}
+PULLBACK (1h, tiered zones)  ${ta.pull ? `${ta.pull.pct.toFixed(0)}% retraced → ${ta.pull.state} (${ta.pull.dir}-move). Bands: 0-23.6 SHALLOW(hold), 23.6-38.2 NORMAL, 38.2-50 MODERATE, 50-61.8 DEEP(reversal risk), 61.8-100 SEVERE(likely reversal/exit), >100 FULL REVERSAL(trend broken)` : "no clear swing"}
 
 AUTO SUPPORT/RESISTANCE (4h swings, touch-ranked)
   resistance: ${res}
