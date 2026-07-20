@@ -631,9 +631,8 @@ const BTC = {
   theme:{ accent:"#f97316", accentText:"#fb923c", panelBg:"#271207", panelBorder:"#7c2d12", loader:"#f97316" },
   keyFields:[
     { field:"anthropic", label:"Anthropic API Key", hint:"required — powers the AI signal", ph:"sk-ant-..." },
-    { field:"glassnode", label:"Glassnode API Key", hint:"optional — adds exchange netflow + SOPR on-chain depth", ph:"(optional)" },
   ],
-  dataNote:"BTC technicals + on-chain (blockchain.info) come from free no-key APIs. Only the Anthropic key is required; add a Glassnode key for netflow/SOPR depth.",
+  dataNote:"BTC technicals + on-chain context (blockchain.info + mempool.space) come from free no-key APIs. Only the Anthropic key is needed.",
   session:getCryptoSession,
   quickPrice: async () => {
     try{ const r=await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"); if(r.ok){const d=await r.json();if(+d.price>1000) return {price:p2(d.price),src:"Binance"};} }catch(_){}
@@ -705,16 +704,14 @@ const BTC = {
     </div>
     {/* ON-CHAIN CONTEXT (Section 2) — supplementary, feeds AI reasoning */}
     <div style={{...card,marginBottom:10}}>
-      <p style={lbl}>On-Chain Context <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· blockchain.info · supplementary</span></p>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:6}}>
+      <p style={lbl}>On-Chain Context <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· blockchain.info + mempool.space · free-tier · supplementary</span></p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:6}}>
         <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Miners' revenue</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_miners)}</p></div>
         <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Transactions/day</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_ntx)}</p></div>
         <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Hash rate</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_hash)}</p></div>
+        <div><p style={{fontSize:9,color:"#475569",margin:"0 0 2px"}}>Mempool / fees</p><p style={{...mono,fontSize:11,margin:0,color:"#e2e8f0"}}>{fmt(s.oc_mempool)}</p></div>
       </div>
-      {s.oc_whale&&<p style={{fontSize:11,color:"#fb923c",...mono,margin:"0 0 4px"}}>🐋 Whale-sized transaction detected — {s.oc_whale}</p>}
-      {(s.oc_netflow||s.oc_sopr)
-        ? <p style={{fontSize:10,color:"#22d3ee",...mono,margin:0}}>Glassnode · netflow {fmt(s.oc_netflow)} · SOPR {fmt(s.oc_sopr)}</p>
-        : s.oc_gnode_missing&&<p style={{fontSize:10,color:"#475569",margin:0}}>On-chain depth unavailable — add a free Glassnode key in settings for exchange netflow + SOPR.</p>}
+      {s.oc_whale&&<p style={{fontSize:11,color:"#fb923c",...mono,margin:0}}>🐋 Whale-sized transaction detected — {s.oc_whale}</p>}
     </div>
     </>
   ),
@@ -724,7 +721,7 @@ ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MAC
 
 YOUR JOB (web search only):
 1. ETF FLOWS (most important): Bitcoin spot ETF daily flows — BlackRock IBIT, Fidelity FBTC. Net inflows = bullish, outflows = bearish.
-2. ON-CHAIN / WHALES: Exchange inflows/outflows, whale movements (Glassnode/CryptoQuant summaries).
+2. ON-CHAIN / WHALES: Exchange inflows/outflows, whale movements, notable on-chain analytics summaries (free sources).
 3. NEWS: Crypto regulatory news last 24h, major exchange news, Fed policy impact on risk assets.
 4. MACRO RISK: Nasdaq/VIX risk-on vs risk-off. Risk-on = bullish BTC, risk-off = bearish.
 5. BIAS SYNTHESIS: All pre-computed data + research → highest-probability direction.
@@ -772,8 +769,8 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     const jget = u => fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);
     // blockchain.info charts (Section 2) — free, no key. cors=true for browser use.
     const bcChart = c => jget(`https://api.blockchain.info/charts/${c}?timespan=8days&format=json&cors=true`);
-    addLog("Fetching BTC market + on-chain data in parallel (Binance + CoinGecko + blockchain.info)...");
-    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, oiHistR, domR, fngR, minersR, ntxR, hashR] = await Promise.all([
+    addLog("Fetching BTC market + on-chain data in parallel (Binance + CoinGecko + blockchain.info + mempool.space)...");
+    const [tickerR, c15, c1h, c4h, c1d, c1w, fundingR, oiR, oiHistR, domR, fngR, minersR, ntxR, hashR, mempoolR, feesR] = await Promise.all([
       jget("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"),
       klines("15m",100).catch(()=>null), klines("1h",100).catch(()=>null), klines("4h",100).catch(()=>null),
       klines("1d",220).catch(()=>null), klines("1w",2).catch(()=>null),
@@ -783,6 +780,8 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       jget("https://api.coingecko.com/api/v3/global"),
       jget("https://api.alternative.me/fng/?limit=1"),
       bcChart("miners-revenue"), bcChart("n-transactions"), bcChart("hash-rate"),
+      // mempool.space (Section 4) — free, no key: congestion + fee pressure proxy.
+      jget("https://mempool.space/api/mempool"), jget("https://mempool.space/api/v1/fees/recommended"),
     ]);
 
     let spot=null, h24=null, l24=null, chg=null;
@@ -807,6 +806,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
       addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
+    else addLog("⚠ Binance candles unavailable — MTF/patterns/ATR skipped (Binance may be geo-restricted or rate-limited in your region). Price falls back to CoinGecko; TA scores NEUTRAL.");
 
     let funding=null, oi=null, oiTrend="—", dom=null, fng=null, fngLabel=null;
     if(fundingR?.[0]?.fundingRate!=null) funding=parseFloat(fundingR[0].fundingRate)*100;
@@ -816,7 +816,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     if(fngR?.data?.[0]?.value){ fng=parseInt(fngR.data[0].value); fngLabel=fngR.data[0].value_classification; }
     addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"}(${oiTrend}) Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
 
-    // ── ON-CHAIN CONTEXT (Section 2): blockchain.info trends + whale flag + Glassnode ──
+    // ── ON-CHAIN CONTEXT: blockchain.info trends + whale flag + mempool.space ──
     const bcLatest = r => { const v=r?.values; if(!Array.isArray(v)||!v.length) return null; const last=v[v.length-1]?.y, first=v[0]?.y; const dir=(last!=null&&first!=null)?(last>first*1.02?"RISING":last<first*0.98?"FALLING":"FLAT"):"unknown"; return { val:last, dir }; };
     const miners=bcLatest(minersR), ntx=bcLatest(ntxR), hash=bcLatest(hashR);
     addLog(`On-chain → miners rev:${miners?.val!=null?"$"+Math.round(miners.val).toLocaleString():"n/a"}(${miners?.dir||"?"}) tx/day:${ntx?.val!=null?Math.round(ntx.val).toLocaleString():"n/a"}(${ntx?.dir||"?"}) hash:${hash?.val!=null?hash.dir:"n/a"}`);
@@ -831,16 +831,18 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const share=v24>0?maxV/v24:0;
       if(share>0.02) whale={ pct:p2(share*100), note:"whale-sized transaction detected" };
     }
-    // Optional Glassnode (user key) — exchange netflow + SOPR; skip gracefully if absent.
-    let gnode=null;
-    if(keys.glassnode){ try{
-      addLog("Fetching Glassnode netflow + SOPR...");
-      const gn = async metric => { const r=await fetch(proxyDataUrl("glassnode", `https://api.glassnode.com/v1/metrics/${metric}?a=BTC&api_key=${keys.glassnode}&i=24h`)); if(!r.ok) return null; const d=await r.json().catch(()=>null); return (Array.isArray(d)&&d.length)?d[d.length-1].v:null; };
-      const [netflow,sopr]=await Promise.all([gn("transactions/transfers_volume_exchanges_net"),gn("indicators/sopr")]);
-      if(netflow!=null||sopr!=null){ gnode={ netflow, sopr }; addLog(`Glassnode → netflow:${netflow!=null?Math.round(netflow).toLocaleString():"n/a"} SOPR:${sopr!=null?sopr.toFixed(3):"n/a"}`); }
-      else addLog("Glassnode returned no data (check key/plan)");
-    }catch(e){ addLog(`Glassnode error: ${e.message}`); } }
-    const onchain={ miners, ntx, hash, whale, gnode };
+    // mempool.space (Section 4) — free network-congestion / fee-pressure proxy.
+    // Rising fees + a full mempool = on-chain demand/congestion, which often
+    // accompanies volatility. Free replacement for the dropped paid on-chain depth feed.
+    let mempool=null;
+    { const fast=feesR?.fastestFee, hour=feesR?.hourFee, count=mempoolR?.count, vsize=mempoolR?.vsize;
+      if(fast!=null || count!=null){
+        const pressure = fast!=null ? (fast>50?"HIGH":fast>20?"ELEVATED":fast>8?"NORMAL":"LOW") : null;
+        mempool={ fastestFee:fast, hourFee:hour, count, vsize, pressure };
+        addLog(`mempool.space → ${count!=null?count.toLocaleString()+" unconfirmed txs":"n/a"} | fastest fee ${fast!=null?fast+" sat/vB":"n/a"}${pressure?" ("+pressure+" pressure)":""}`);
+      } else addLog("mempool.space unavailable");
+    }
+    const onchain={ miners, ntx, hash, whale, mempool };
 
     const session=getCryptoSession();
     const atr=td?.atr4h??null;
@@ -872,12 +874,12 @@ ATR & STOP (4h)  ATR:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na
 BTC CONTEXT  Weekly candle: ${td?.weeklyDir||"n/a"} (first weekly candle has 60%+ predictive value for the week) | Whale wick (4h): ${td?.whaleWick||"none"}
   Funding+pattern combo: funding ${funding!=null?funding.toFixed(4)+"%":"n/a"} ${funding>0.1?"+ bearish candle at resistance = STRONG SHORT":funding<-0.05?"+ bullish candle at support = STRONG LONG":""}. 4h volume >300% avg = institutional move, weight heavily.
 
-ON-CHAIN CONTEXT (blockchain.info — SUPPLEMENTARY context feeding your reasoning alongside funding/OI, NOT a standalone gate)
+ON-CHAIN CONTEXT (free-tier proxies: blockchain.info + mempool.space — SUPPLEMENTARY context feeding your reasoning alongside funding/OI, NOT a standalone gate)
   Miners' revenue: ${miners?.val!=null?"$"+Math.round(miners.val).toLocaleString():"n/a"} (${miners?.dir||"?"} vs last week — sharply falling can pressure price via miner selling/capitulation)
   Transactions/day: ${ntx?.val!=null?Math.round(ntx.val).toLocaleString():"n/a"} (${ntx?.dir||"?"} — rising = network usage/demand increasing, supportive)
   Hash rate: ${hash?.val!=null?hash.val.toExponential(2):"n/a"} (${hash?.dir||"?"} — rising = miner confidence/network security up)
+  Network congestion / fees (mempool.space): ${mempool?`${mempool.count!=null?mempool.count.toLocaleString()+" unconfirmed txs":"n/a"} | fastest fee ${mempool.fastestFee!=null?mempool.fastestFee+" sat/vB":"n/a"} → ${mempool.pressure||"n/a"} fee pressure (rising fees/backlog = on-chain demand & congestion, which often accompanies volatility)`:"n/a"}
   Whale activity: ${whale?`⚠ ${whale.note} — a single 15m candle carried ${whale.pct}% of 24h volume (outsized block, possible whale/institutional print)`:"no outsized single-candle volume burst detected in the last 2h"}
-  ${gnode?`Glassnode → Exchange netflow: ${gnode.netflow!=null?Math.round(gnode.netflow).toLocaleString()+" BTC (negative = net OUTFLOW → bullish accumulation; positive = net INFLOW → potential selling)":"n/a"} | SOPR: ${gnode.sopr!=null?gnode.sopr.toFixed(3)+(gnode.sopr>1?" (>1 → holders realizing profit)":gnode.sopr<1?" (<1 → coins moving at a loss, capitulation)":""):"n/a"}`:"On-chain depth (exchange netflow, SOPR) unavailable — add a free Glassnode key in settings for this data."}
 
 ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable — score candles & mtf NEUTRAL"}
 
@@ -894,8 +896,7 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
       if(oc.ntx?.val!=null)    p.oc_ntx=`${Math.round(oc.ntx.val).toLocaleString()}/day · ${oc.ntx.dir?.toLowerCase()}`;
       if(oc.hash?.val!=null)   p.oc_hash=`${oc.hash.dir?.toLowerCase()}`;
       if(oc.whale)             p.oc_whale=`${oc.whale.pct}% of 24h vol in one 15m candle`;
-      if(oc.gnode){ if(oc.gnode.netflow!=null) p.oc_netflow=`${Math.round(oc.gnode.netflow).toLocaleString()} BTC`; if(oc.gnode.sopr!=null) p.oc_sopr=oc.gnode.sopr.toFixed(3); }
-      else p.oc_gnode_missing=true;
+      if(oc.mempool){ const mp=oc.mempool; p.oc_mempool=`${mp.count!=null?mp.count.toLocaleString()+" txs":"n/a"}${mp.fastestFee!=null?` · ${mp.fastestFee} sat/vB`:""}${mp.pressure?` (${mp.pressure})`:""}`; }
     }
     if(h24!=null&&!p.high_24h) p.high_24h=String(h24);
     if(l24!=null&&!p.low_24h)  p.low_24h=String(l24);

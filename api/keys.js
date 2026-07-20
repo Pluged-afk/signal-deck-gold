@@ -6,7 +6,7 @@ import { authOK, aesKey, encKeys, readUserKeys, MASK } from "./_userkeys.js";
 // client can still tell a key is configured) while the real values stay server-
 // side and are used only by the /api/signal and /api/data proxies. POST saves new
 // values; a field left as the sentinel keeps the existing stored value untouched.
-const FIELDS = ["anthropic", "td", "fred", "glassnode"];
+const FIELDS = ["anthropic", "td", "fred"];
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");

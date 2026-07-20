@@ -264,7 +264,7 @@ export const inWindow = win => {
 };
 
 // ═══ Section 7: server-side proxy configuration ═════════════════════════════
-// PROXY_DATA routes the KEYED upstreams (Twelve Data, FRED, Glassnode) through
+// PROXY_DATA routes the KEYED upstreams (Twelve Data, FRED) through
 // our same-origin /api/data function, which injects the key server-side — so no
 // data key ever appears in a browser network request. SIGNAL_PROXY controls, per
 // asset, whether the Anthropic call goes through /api/signal (server-side key) vs
@@ -476,7 +476,7 @@ export const signalCount = () => { try { return parseInt(sessionStorage.getItem(
 
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
-export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", glassnode:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"", glassnode:"" }; } };
+export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };
 // Saving also pushes to the encrypted server store (/api/keys, gated by the login
 // cookie) so keys survive browser clears and follow the passcode across devices.
 export const saveKeys = k => {
