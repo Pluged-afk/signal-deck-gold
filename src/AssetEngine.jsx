@@ -324,6 +324,30 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         {/* Section 3c: marginal-setup hero banner (visible regardless of confidence) */}
         <MarginalBanner conditions={sig._marginal}/>
 
+        {/* Delay-adjusting mechanism (US500 ONLY — set only by assets on a delayed
+            feed). Ticks the TRUE age of the shown price live off the one clock, and
+            shows a drift band = how far the live price may have moved during the
+            delay, so you act on "now" not a 10-min-old snapshot. */}
+        {sig._delay && sig._delay.asOf && (()=>{
+          const ageMin = Math.max(0, (now - sig._delay.asOf) / 60000);
+          const stale = ageMin > 60;
+          const band = sig._delay.atr1h != null ? sig._delay.atr1h * (ageMin / 60) : null;
+          const ageTxt = ageMin < 60 ? `${Math.floor(ageMin)}m ${String(Math.floor((ageMin % 1) * 60)).padStart(2,"0")}s` : `${(ageMin / 60).toFixed(1)}h`;
+          return (
+            <div style={{...card, background: stale?"#1a0505":"#1f1206", border:`1px solid ${stale?"#dc2626":"#7c2d12"}`, marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+                <p style={{fontSize:12,fontWeight:700,color:stale?"#f87171":"#fb923c",margin:"0 0 3px"}}>⏱ This price is {ageTxt} old right now{stale?" — ⚠ STALE (US market likely closed)":""}</p>
+                {band!=null&&!stale&&<span style={{...mono,fontSize:12,fontWeight:700,color:"#fbbf24"}}>live ≈ {config.pricePrefix}{fmt(sig.price)} ±{band.toFixed(1)}</span>}
+              </div>
+              <p style={{fontSize:11,color:"#fdba74",...mono,margin:0,lineHeight:1.5}}>
+                {stale
+                  ? "US market is likely closed — this price is frozen at the last session. Refresh when it reopens; don't act on these levels."
+                  : <>Free ES=F feed is ~10-15 min delayed{band!=null?` — at current volatility the live price may be ±${band.toFixed(1)} pts from these levels`:""}. Act on Pepperstone's CURRENT price (confirm your entry is still valid{band!=null?" within that band":""}); this snapshot is not live.</>}
+              </p>
+            </div>
+          );
+        })()}
+
         {/* Gold PDH/PDL stop-hunt / liquidity-sweep alert */}
         {sig._sweepNote && (
           <div style={{...card,background:"#1c1408",border:"1px solid #b45309",marginBottom:10}}>

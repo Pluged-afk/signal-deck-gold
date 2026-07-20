@@ -341,10 +341,9 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
 // ════════════════════════════════════════════════════════════════════════════
 // ASSET 2 — US500 (S&P 500 index CFD)
 // ════════════════════════════════════════════════════════════════════════════
-// Twelve Data has no single canonical S&P symbol across plans, so we try a list
-// (SPX index → ES futures proxy → US500 CFD → GSPC) and use whichever returns
-// valid candles, logging which one served the data (Sections 1 & 6).
-const US500_SYMBOLS = ["SPX", "ES", "US500", "GSPC"];
+// US500 index data comes from a FREE, no-key server proxy (Yahoo ^GSPC via
+// /api/us500) — Twelve Data's free tier excludes index/futures data, so US500
+// needs no data key at all (only the Anthropic key; FRED is optional).
 
 // Approximate quarterly US earnings-season windows — mega-cap reports cluster
 // mid-month in Jan / Apr / Jul / Oct. Hardcoded (Section 1): flags elevated
@@ -362,12 +361,12 @@ const US500 = {
   theme:{ accent:"#0891b2", accentText:"#22d3ee", panelBg:"#062a34", panelBorder:"#155e75", loader:"#0891b2" },
   keyFields:[
     { field:"anthropic", label:"Anthropic API Key", hint:"required — powers the AI signal", ph:"sk-ant-..." },
-    { field:"td",        label:"Twelve Data Key",   hint:"MACD, RSI, ATR, VWAP, Volume, 200MA — required for index data", ph:"a1b2c3d4..." },
-    { field:"fred",      label:"FRED API Key",      hint:"10Y yield + Fed expectations (free)", ph:"abcdef123456..." },
+    { field:"fred",      label:"FRED API Key",      hint:"optional — adds 10Y yield + Fed expectations (free)", ph:"(optional)" },
   ],
+  dataNote:"S&P 500 index data (price, candles, MTF) comes from a free no-key source. Only the Anthropic key is required; add a free FRED key for yield/Fed context.",
   session:getUS500Session,
-  quickPrice: async (keys) => {
-    if(keys.td){ for(const sym of US500_SYMBOLS){ try{ const r=await fetch(proxyDataUrl("td", `https://api.twelvedata.com/price?symbol=${encodeURIComponent(sym)}&apikey=${keys.td}`)); const d=await r.json(); if(parseFloat(d.price)>100) return {price:p2(d.price),src:`Twelve Data (${sym})`}; }catch(_){} } }
+  quickPrice: async () => {
+    try{ const r=await fetch("/api/us500?price=1"); if(r.ok){ const d=await r.json(); if(d?.price>100) return {price:p2(d.price),src:d.src||"Yahoo ^GSPC"}; } }catch(_){}
     return null;
   },
   sessionsGuide:[
@@ -400,8 +399,8 @@ const US500 = {
     ...TA_ROWS,
   ],
   readyLines:(k)=>[
-    k.td?"✓ Twelve Data (MACD/RSI/ATR/VWAP/Volume/200MA — SPX→ES→US500 fallback)":"⚠ No Twelve Data — index data unavailable",
-    (k.fred?"✓ FRED (10Y yield + Fed expectations)":"⚠ No FRED — web search fallback")+" · VIX via web search · Session windows assume US EDT",
+    "✓ S&P 500 index — free source (Yahoo ^GSPC): price, 15m/1h/4h/daily candles, MACD/RSI/ATR/VWAP/200MA",
+    (k.fred?"✓ FRED (10Y yield + Fed expectations)":"⚠ No FRED — Fed/yield via web search")+" · VIX via web search · Session windows assume US EDT",
   ],
   levelsTitle:"Key Levels",
   levels:(s)=>[
@@ -469,39 +468,26 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 {"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"1.5x ATR","stop_pct":"0.8","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","vix":"XX.X — rising|falling","fed_expectations":"e.g. 25bp cut ~60% priced for next FOMC","cot_net":"value or empty","cot_sentiment":"NEUTRAL or unavailable","earnings_flag":"season note or empty","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"vix_fed":{"r":"PASS|FAIL|NEUTRAL","note":"VIX level + direction"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"or unavailable"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"regime":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 XXXX — close 50% move stop to entry","T2 XXXX — close rest","Stop XXXX — full exit","Time — close by session end (gap risk)"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
   pipeline: async ({ keys, addLog }) => {
-    let symbol = null;
-    const tdCandles = async (interval, outputsize=100) => {
-      const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${keys.td}`, addLog);
-      if(d?.status==="error") throw new Error(`Twelve Data: ${d.message}`);
-      const v=(d?.values||[]).reverse();
-      return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
-    };
     const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
 
-    // ── Resolve the working Twelve Data symbol (SPX → ES → US500 → GSPC) ──
-    addLog("Resolving US500 symbol (SPX → ES → US500 → GSPC)...");
-    if(keys.td){
-      for(const sym of US500_SYMBOLS){
-        try{
-          const d=await tdFetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1h&outputsize=3&apikey=${keys.td}`, addLog);
-          if(d?.values?.length && parseFloat(d.values[0].close)>100){ symbol=sym; break; }
-        }catch(_){}
-      }
-    }
-    if(symbol) addLog(`✓ Twelve Data symbol in use: ${symbol}`);
-    else addLog("⚠ No Twelve Data symbol returned valid S&P data — a TD key is required for US500 index data");
-
+    // ── S&P 500 candles from our FREE, no-key server proxy. Prefers ES=F (e-mini
+    // futures, ~23h, tracks the CFD) over the cash index; ~10-15 min delayed. Twelve
+    // Data's free tier excludes index/futures data, so US500 needs no data key.
+    // 15m/1h/1day from Yahoo; 4h resampled from 1h (see /api/us500). ──
+    addLog("Fetching US500 (S&P 500) index data — free source (Yahoo ES=F)...");
+    let us=null;
+    try{ const r=await fetch("/api/us500"); if(r.ok) us=await r.json(); else { const e=await r.json().catch(()=>({})); addLog(`US500 source error: ${e.error||("HTTP "+r.status)}`); } }catch(e){ addLog(`US500 source error: ${e.message}`); }
+    const c15=us?.c15||null, c1h=us?.c1h||null, c4h=us?.c4h||null, c1d=us?.c1d||null;
+    const dataAge=us?.ageMin, dataAsOf=us?.asOf;
     let spot=null;
-    if(symbol){ try{ const d=await tdFetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${keys.td}`, addLog); if(d?.price&&parseFloat(d.price)>100) spot={price:p2(d.price),src:`Twelve Data (${symbol})`}; }catch(_){} }
+    if(us?.price>100) spot={price:p2(us.price),src:us.src||"Yahoo ES=F"};
+    else if(c1h?.closes?.length) spot={price:p2(c1h.closes[c1h.closes.length-1]),src:us?.src||"Yahoo ES=F"};
+    // Staleness guard: outside trading hours (or a bad feed) the quote can be old.
+    const stale=dataAge!=null&&dataAge>60;
+    if(spot) addLog(`US500 spot ${spot.price} — data ${dataAge!=null?dataAge+" min old":"age unknown"}${stale?" ⚠ STALE (market may be closed — treat with caution)":""}`);
 
     let td=null, ta=null;
-    if(symbol){ try{
-      addLog("Fetching 15m/1h/4h/daily candles in parallel...");
-      const settled=await Promise.allSettled([tdCandles("15min",100),tdCandles("1h",100),tdCandles("4h",100),tdCandles("1day",210)]);
-      const [c15,c1h,c4h,c1d]=settled.map(r=>r.status==="fulfilled"?r.value:null);
-      settled.forEach((r,i)=>{ if(r.status==="rejected") addLog(`${["15m","1h","4h","daily"][i]} candles failed: ${r.reason?.message||r.reason}`); });
-      if(!spot&&c1h&&c1h.closes.length){ spot={price:p2(c1h.closes[c1h.closes.length-1]),src:`Twelve Data candle (${symbol})`}; }
-      if(c1h&&c4h){
+    if(c1h&&c4h){ try{
         const macd1h=calcMACD(c1h.closes), rsi1h=calcRSI(c1h.closes), atr1h=calcATR(c1h.highs,c1h.lows,c1h.closes);
         const vwap=calcVWAP(c1h.highs.slice(-23),c1h.lows.slice(-23),c1h.closes.slice(-23),c1h.volumes.slice(-23));
         const vol1h=calcVolRatio(c1h.volumes);
@@ -522,10 +508,9 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24, pdh,pdl, volRatio,gap, bullMacd:bull, bearMacd:3-bull };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
-      } else addLog("1h/4h candles unavailable — skipping local TA");
-    }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
+    }catch(e){ addLog(`US500 TA error: ${e.message}`); } } else addLog("1h/4h candles unavailable — skipping local TA (S&P source may be down).");
 
-    if(!spot) throw new Error("Could not fetch US500 price — a Twelve Data key is required for S&P 500 index data.");
+    if(!spot) throw new Error("Could not fetch US500 index data — the free S&P 500 source is temporarily unavailable. Please retry.");
     addLog(`Spot: ${spot.price} (${spot.src})`);
 
     // ── Rates / Fed expectations — reuse Gold's FRED series (Section 1) ──
@@ -566,6 +551,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
 
 PRICE
   US500 (S&P 500) Spot: ${spot.price} (${spot.src})
+  ⚠ DATA FRESHNESS (US500 ONLY): this is an E-mini futures proxy on a FREE feed, ~${dataAge!=null?dataAge:"10-15"} min old${stale?" — STALE (US market likely closed; be cautious)":""}. UNLIKE gold, it is NOT a live institutional tick and there is NO Swissquote cross-check. The directional bias, structure, MTF and levels are valid, but the exact price is delayed — tell the user in the reasoning to CONFIRM the live price on their Pepperstone platform before entering, and treat entry/stop/target as approximate. It may also differ slightly from Pepperstone's exact CFD quote (futures basis).
   24h High: ${na(td?.h24)} | 24h Low: ${na(td?.l24)}
   VWAP (23h): ${f2(td?.vwap)} → price ${td?.vwap?(spot.price>td.vwap?"ABOVE — bullish intraday":"BELOW — bearish intraday"):"unknown"}
   Session: ${session.label} (${session.quality})${td?.gap!=null?` | Overnight gap vs prior close: ${td.gap>0?"+":""}${td.gap}%${Math.abs(td.gap)>0.5?" — GAP RISK, a stop can be jumped":""}`:""}
@@ -602,10 +588,15 @@ ${ta?taPromptBlock(ta, v=>f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable 
 
 === YOUR JOB: search VIX (required), news, Fed expectations, key S/R, binary events → output JSON ===`;
 
-    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, cot, stopAmt, stopPct, ta, earn, symbol } };
+    return { pkg, price:spot.price, src:spot.src, session, meta:{ td, macro, cot, stopAmt, stopPct, ta, earn, dataAge, stale, dataAsOf } };
   },
   merge:(p,m)=>{
-    const { td, macro, cot, ta, earn } = m;
+    const { td, macro, cot, ta, earn, dataAsOf } = m;
+    // Delay-adjusting mechanism (US500 ONLY — the free ES=F feed is ~10-15 min
+    // delayed; gold/BTC feeds are live so they set nothing here). Store the ABSOLUTE
+    // as-of timestamp + the 1h ATR so the UI can tick the true age live and show a
+    // drift band (how far the live price may have moved during the delay).
+    p._delay = { asOf: dataAsOf ? Date.parse(dataAsOf) : null, atr1h: td?.atr1h ?? null, dec: 2 };
     if(td?.h24&&!p.high_24h) p.high_24h=String(td.h24);
     if(td?.l24&&!p.low_24h)  p.low_24h=String(td.l24);
     if(td?.ma200)            p.ma200=td.ma200.toFixed(2);
