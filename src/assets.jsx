@@ -166,11 +166,11 @@ SIGNAL RULES:
 - Low volume breakout → confidence capped at MEDIUM
 - COT is context only (no predictive correlation) — mention extreme crowding as a risk note, never as a directional reason
 - Stop: use the ATR-based value provided. Do not widen it.
-- TARGETS (calibrated for per-signal hit rate — stop is 1.5× ATR, which defines 1R):
-  T1 = 1.5× ATR from entry (= 1.0R). Historically resolved as a win 58% of the time on gold at the top MTF rung.
-  T2 = 3.0× ATR from entry (= 2.0R, so R:R at T2 is 1:2). Hit ~33% of the time — this is the runner, not the base case.
-  Do NOT push T1 out to 2.25× ATR (1.5R): that drops the T1 hit rate to ~45%. Closer T1 = more signals that actually work.
-  R:R measured at T2 <1:2 → WAIT
+- TARGETS: stop is 1.5× ATR, which defines 1R. T1/T2 are NOT fixed — they SCALE with the higher-timeframe
+  confirmation rung, and the exact values for this signal are given in the TARGET DISTANCE line of the
+  multi-timeframe block below. Use those. They are calibrated so every signal lands near a ~60% T1 hit rate:
+  a fully-confirmed set-up earns a farther target, a weakly-confirmed one gets a closer one.
+  Do not substitute your own multiple, and do not stretch T1 to chase a rounder R:R.
 - Off-peak session + no strong catalyst → cap confidence at MEDIUM
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
@@ -493,7 +493,7 @@ SIGNAL RULES (calibrated — do NOT over-output WAIT; cable is a normal-trending
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
 - SIGNAL QUALITY: <30 = WAIT; 30-50 = LOW; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH.
 - Stop: use the ATR-based pip value provided (1.5× 4h ATR) — this defines 1R.
-- TARGETS (calibrated for per-signal hit rate): T1 = 1.5× ATR from entry (= 1.0R), which historically resolved as a win 62% of the time on cable at the top MTF rung. T2 = 3.0× ATR (= 2.0R, R:R 1:2) — the runner, hit ~35%. Do NOT push T1 to 2.25× ATR (1.5R): the hit rate drops to ~49%. R:R measured at T2 <1:2 → WAIT.
+- TARGETS: T1/T2 are NOT fixed — they SCALE with the higher-timeframe confirmation rung, and the exact values for this signal are in the TARGET DISTANCE line of the multi-timeframe block below. Use those. They are calibrated so every signal lands near a ~60% T1 hit rate. Do not substitute your own multiple, and do not stretch T1 to chase a rounder R:R.
 - Off-peak (Asian) + no catalyst → cap confidence at MEDIUM.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
@@ -777,7 +777,7 @@ SIGNAL RULES:
 - SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH..
 - Funding above the auto-calibrated crowded-long bar + price at resistance = high-probability SHORT.
 - Stop: use the ATR-based value provided (do not widen) — this defines 1R.
-- TARGETS (calibrated for per-signal hit rate): T1 = 1.5× ATR from entry (= 1.0R), which historically resolved as a win 60% of the time on BTC at the top MTF rung. T2 = 3.0× ATR (= 2.0R, R:R 1:2) — the runner, hit ~39%. Do NOT push T1 to 2.25× ATR (1.5R): the hit rate drops to ~49%.
+- TARGETS: T1/T2 are NOT fixed — they SCALE with the higher-timeframe confirmation rung, and the exact values for this signal are in the TARGET DISTANCE line of the multi-timeframe block below. Use those. They are calibrated so every signal lands near a ~60% T1 hit rate. Do not substitute your own multiple, and do not stretch T1 to chase a rounder R:R.
 - Minimum R:R 1:2.5 for BTC. R:R <1:2.5 → WAIT.
 - Weekend/low-volume + no catalyst → cap confidence at MEDIUM.
 
