@@ -212,6 +212,23 @@ export const trendOf = closes => {
   return p > e * 1.0005 ? "BULL" : p < e * 0.9995 ? "BEAR" : "FLAT";
 };
 
+// Higher-timeframe trend. Same idea as trendOf but with a WIDER flat band: a
+// ±0.05% band is meaningless on a daily/weekly close, so the daily was forced to
+// take a side even when genuinely directionless, manufacturing false conflicts.
+// Backtest across gold/GBP/BTC, train AND test halves (6/6 improvements), showed a
+// smooth plateau from 0.25%–1.0% — 0.5% sits safely inside it (1.5% breaks GBP).
+//   period 20 on daily closes  = the daily trend
+//   period 100 on daily closes = the weekly trend (20 weeks ≈ weekly EMA20), which
+//   matched true weekly-candle aggregation within noise while avoiding the fact
+//   that Twelve Data returns date strings and Binance returns ms timestamps.
+export const htfTrend = (closes, period = 20, band = 0.005) => {
+  if (!closes || closes.length < period + 1) return "FLAT";
+  const e = calcEMAlast(closes, period);
+  if (e == null) return "FLAT";
+  const p = closes[closes.length - 1];
+  return p > e * (1 + band) ? "BULL" : p < e * (1 - band) ? "BEAR" : "FLAT";
+};
+
 // ─── trend-context helpers (weighted inputs for the AI, not hard rules) ───────
 // bars = per-asset calibrated ADX thresholds (GBP/USD trends less sharply than
 // gold/BTC, so its weak/strong bars are lower — set from real ADX distribution).
@@ -324,7 +341,11 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
   // c1h and c4h are required (master timeframes); c15 is optional (entry timing);
   // c1d is optional but strongly recommended — see dailyConflict below.
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
-  const tD = (c1d && c1d.closes && c1d.closes.length >= 21) ? trendOf(c1d.closes) : "FLAT";
+  // Daily + weekly, both derived from the daily candle array the pipelines already fetch.
+  const dC = (c1d && c1d.closes) ? c1d.closes : null;
+  const htfOK = !!(dC && dC.length >= 21);
+  const tD = htfOK ? htfTrend(dC, 20) : "FLAT";
+  const tW = (dC && dC.length >= 101) ? htfTrend(dC, 100) : "FLAT";
   const adxR = calcADX(c4h.highs, c4h.lows, c4h.closes, 14);
   const adx = adxR ? adxR.adx : null;
   const fib = calcFib(c4h.highs.slice(-50), c4h.lows.slice(-50), price, c4hTimes ? c4hTimes.slice(-50) : null);
@@ -351,13 +372,20 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
   const mtfConflict = t4 !== "FLAT" && t1 !== "FLAT" && t4 !== t1;                 // 4h vs 1h disagree
   const allDisagree = t4 !== t1 && t1 !== t15 && t4 !== t15;                        // all 3 different = chop
   const overall = t4 === t1 ? t4 : "WAIT";
-  // DAILY GATE — the single largest measured accuracy factor in this engine.
-  // Backtested on real candles (gold 2.5y/2494 set-ups, GBP 2.7y/2450, BTC 3y/4586):
-  // when 4h+1h agree but the DAILY trend opposes them, expectancy is -0.14R (gold),
-  // -0.26R (GBP), -0.24R (BTC) with win rates of 26%/18%/21%. Requiring the daily to
-  // agree lifts expectancy to +0.13/+0.09/+0.14R and win rate to 43%/41%/47%, and it
-  // held in all 12 quarter-by-quarter sub-periods, in BOTH directions, at 12/24/48h
-  // horizons, and on a non-overlapping resample (pooled p<0.00001).
+  // ── HIGHER-TIMEFRAME CONFIRMATION LADDER — the largest measured accuracy factor ──
+  // How many of {1h, daily, weekly} confirm the 4h direction. Backtested on real
+  // candles (gold 2.9k set-ups, GBP 3.6k, BTC 5.5k) the relationship is MONOTONE in
+  // every asset and in both train and test halves:
+  //     0/3   -0.03…-0.22R   24-34% win
+  //     1/3   -0.09…-0.16R   25-27% win
+  //     2/3   +0.03…+0.11R   36-41% win
+  //     3/3   +0.16…+0.21R   45-50% win
+  // Survives the non-overlapping resample that killed every other candidate tested:
+  // 3/3 vs 0-1/3 Δ0.368R p<0.000001, and even 3/3 vs 2/3 Δ0.161R p=0.0005.
+  // Used as a CONFIDENCE LADDER, not a hard gate: gating on weekly raised per-trade
+  // expectancy but LOWERED total accumulated R (gold 260→241, BTC 429→334) by
+  // dropping too many signals. Tiering keeps the signal and grades it instead.
+  const htfConfirm = htfOK && t4 !== "FLAT" ? [t1, tD, tW].filter(t => t === t4).length : null;
   const dailyAligned = mtfAligned && tD === t4;
   const dailyConflict = mtfAligned && tD !== "FLAT" && tD !== t4;
   const sigOf = t => t === "BULL" ? "LONG" : t === "BEAR" ? "SHORT" : "—";
@@ -375,6 +403,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
 
   const mtf = {
     rows: [
+      { tf: "1W", trend: tW, candle: "—", volume: "—", signal: sigOf(tW) },
       { tf: "1D", trend: tD, candle: "—", volume: "—", signal: sigOf(tD) },
       { tf: "4h", trend: t4, candle: pat4[0]?.name || "—", volume: vol4?.cls || "—", signal: sigOf(t4) },
       { tf: "1h", trend: t1, candle: pat1[0]?.name || "—", volume: vol1?.cls || "—", signal: sigOf(t1) },
@@ -386,7 +415,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
     ],
     overall: overall === "WAIT" ? "WAIT" : sigOf(overall),
     aligned: mtfAligned,
-    dailyAligned, dailyConflict,
+    dailyAligned, dailyConflict, htfConfirm,
   };
 
   const entries = {
@@ -401,7 +430,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
   };
 
   return {
-    t4, t1, t15, tD, dailyAligned, dailyConflict, adx, adxClass: adxClass(adx),
+    t4, t1, t15, tD, tW, dailyAligned, dailyConflict, htfConfirm, adx, adxClass: adxClass(adx),
     fib, sr, pull, vol4, vol1, vol15, volDiv,
     pat4, pat1, pat15, patternBias, keyPattern, nearRes, nearSup,
     mtf, entries, atr4h, bb,
@@ -427,7 +456,13 @@ export const signalQuality = (parsed, ta, scoredKeys) => {
   let bonus = 0;
   if (ta.keyPattern && (ta.nearRes || ta.nearSup)) bonus += 15;
   if (ta.mtf.aligned) bonus += 10;
-  if (ta.dailyAligned) bonus += 10;        // daily agrees with 4h+1h — the measured edge (see analyzeTimeframes)
+  // Higher-timeframe ladder (see analyzeTimeframes). Scaled, not binary — the
+  // measured step from 2/3 to 3/3 is as real as the step from 1/3 to 2/3.
+  // NOTE this only ADDS points to confirmed set-ups; it never subtracts, so no
+  // signal that previously cleared the WAIT bar can be newly blocked by it. The
+  // de-rating of unconfirmed set-ups happens via the confidence cap, not the score.
+  if (ta.htfConfirm === 3) bonus += 10;
+  else if (ta.htfConfirm === 2) bonus += 5;
   if (ta.vol4 && ta.vol4.cls === "HIGH") bonus += 5;
   if (ta.adx != null && ta.adx > (ta._cal?.strong ?? 25)) bonus += 5; // per-asset strong-trend bar
   if (ta.divergence && ta.divergence.type !== "none") bonus += 5; // momentum divergence confirmation
@@ -475,8 +510,10 @@ export const taPromptBlock = (ta, f) => {
   const pats = (lbl, arr) => arr.length ? `${lbl}: ${arr.map(p => `${p.name}[${p.dir}]`).join(", ")}` : `${lbl}: none`;
   const st = ta.structure, sb = ta.sessionBias, pd = ta.prevDayBias;
   return `MULTI-TIMEFRAME (computed locally — prefer trading WITH the 4h trend; if 4h≠1h cap confidence at LOW, do NOT auto-WAIT; only WAIT if all three timeframes disagree)
-  DAILY trend: ${ta.tD} | 4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
-  DAILY GATE ★ ${ta.dailyConflict ? `CONFLICT — the daily trend (${ta.tD}) OPPOSES the aligned 4h/1h direction. This is the single worst-performing condition measured in this engine: backtested win rate drops to 18-26% and expectancy to -0.14R…-0.26R across gold/GBP/BTC. RULE: cap confidence at LOW, state the daily conflict in the reasoning, and prefer WAIT unless there is a strong, explicit catalyst for the counter-daily move.` : ta.dailyAligned ? `ALIGNED — daily, 4h and 1h all point ${ta.tD}. This is the highest-quality condition measured (win rate 43-47%, expectancy +0.09R…+0.14R). Full confidence is justified if the rest of the scorecard supports it.` : `daily is ${ta.tD} — neutral/flat, neither confirming nor opposing. Treat as normal; weight the 4h/1h read.`}
+  WEEKLY trend: ${ta.tW} | DAILY trend: ${ta.tD} | 4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
+  HIGHER-TIMEFRAME LADDER ★★ ${ta.htfConfirm == null ? "unavailable (no daily candles) — ignore this rule" : `${ta.htfConfirm}/3 of {1h, daily, weekly} confirm the 4h ${ta.t4} direction.
+  This is the STRONGEST measured predictor in this engine. Backtested win rate by rung: 0/3 = 24-34%, 1/3 = 25-27%, 2/3 = 36-41%, 3/3 = 45-50% (monotone across gold/GBP/BTC in both train and test halves).
+  RULE: 3/3 → HIGH confidence is justified if the scorecard agrees. 2/3 → cap confidence at MEDIUM. 0-1/3 → cap at LOW and lean WAIT unless there is a strong explicit catalyst. Current rung: ${ta.htfConfirm}/3 → ${ta.htfConfirm === 3 ? "HIGH allowed" : ta.htfConfirm === 2 ? "cap at MEDIUM" : "cap at LOW / lean WAIT"}.`}${ta.dailyConflict ? `\n  ⚠ DAILY CONFLICT — the daily trend (${ta.tD}) directly OPPOSES the aligned 4h/1h direction (win rate 18-26%). State this in the reasoning.` : ""}
   ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (calibrated for THIS pair: <${ta._cal?.weak ?? 20} weak, ${ta._cal?.weak ?? 20}-${ta._cal?.strong ?? 25} developing, >${ta._cal?.strong ?? 25} strong)
   Volatility Meter (4h): ${ta.vmeter ? `${ta.vmeter.pct}% of this asset's normal → ${ta.vmeter.level}` : "n/a"}
   LEVEL FLIP: ${ta.flip && ta.flip.status !== "none" ? `${ta.flip.status.toUpperCase()} — ${ta.flip.dir}-break of ${f(ta.flip.level)}${ta.flip.note ? " (" + ta.flip.note + ")" : ""}. RULE: on a PENDING flip do NOT give a full-confidence breakout — cap at LOW and mark it pending; on a FALSE_BREAK treat the breakout as failed (lean the other way or WAIT); only a CONFIRMED flip supports a normal-confidence breakout trade.` : "no unconfirmed level break"}

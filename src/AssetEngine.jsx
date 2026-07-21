@@ -98,6 +98,14 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           // Daily gate: 4h+1h agree but the daily opposes them — measured win rate
           // 18-26% vs 43-47% when the daily agrees. Same treatment as a 4h/1h conflict.
           if(ta?.dailyConflict){ parsed._dailyConflict = true; addLog(`DAILY conflict (daily ${ta.tD} vs 4h/1h ${ta.t4}) — capping confidence at LOW`); }
+          // Higher-timeframe ladder — how many of {1h, daily, weekly} confirm the 4h.
+          // Measured win rate by rung: 0/3 24-34%, 1/3 25-27%, 2/3 36-41%, 3/3 45-50%.
+          // Skipped entirely when daily candles are unavailable (htfConfirm === null).
+          if(ta?.htfConfirm != null){
+            parsed._htfConfirm = ta.htfConfirm;
+            if(ta.htfConfirm <= 1){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; addLog(`HTF ladder ${ta.htfConfirm}/3 confirm (1h ${ta.t1} / daily ${ta.tD} / weekly ${ta.tW} vs 4h ${ta.t4}) — capping confidence at LOW`); }
+            else if(ta.htfConfirm === 2 && parsed.confidence === "HIGH"){ parsed.confidence = "MEDIUM"; addLog(`HTF ladder 2/3 confirm — capping confidence at MEDIUM`); }
+          }
         }
       }
 

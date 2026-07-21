@@ -39,7 +39,7 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2, waitBa
           <div style={{ height: 8, background: "#020617", borderRadius: 6, overflow: "hidden" }}>
             <div style={{ width: `${q.score}%`, height: "100%", background: qCol(q.label), transition: "width 0.4s" }} />
           </div>
-          <p style={{ fontSize: 9, color: "#475569", margin: "6px 0 0" }}>scorecard PASSes ×10 + bonuses (pattern@level +15, MTF aligned +10, high vol +5, strong ADX +5, divergence +5). &lt;{waitBar} = WAIT, &lt;50 = LOW confidence.</p>
+          <p style={{ fontSize: 9, color: "#475569", margin: "6px 0 0" }}>scorecard PASSes ×10 + bonuses (pattern@level +15, MTF aligned +10, HTF ladder 3/3 +10 · 2/3 +5, high vol +5, strong ADX +5, divergence +5). &lt;{waitBar} = WAIT, &lt;50 = LOW confidence.</p>
         </div>
       )}
 
