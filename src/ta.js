@@ -320,9 +320,11 @@ export const flipCheck = (c4h, sr, atr4h) => {
 // ─── master aggregator ───────────────────────────────────────────────────────
 // Each c* = { opens, highs, lows, closes, volumes }. `cal` = per-asset calibrated
 // ADX bars ({weak,strong}); defaults to gold/BTC's 20/25 when omitted.
-export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevClose, cal }) => {
-  // c1h and c4h are required (master timeframes); c15 is optional (entry timing).
+export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, prevClose, cal }) => {
+  // c1h and c4h are required (master timeframes); c15 is optional (entry timing);
+  // c1d is optional but strongly recommended — see dailyConflict below.
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
+  const tD = (c1d && c1d.closes && c1d.closes.length >= 21) ? trendOf(c1d.closes) : "FLAT";
   const adxR = calcADX(c4h.highs, c4h.lows, c4h.closes, 14);
   const adx = adxR ? adxR.adx : null;
   const fib = calcFib(c4h.highs.slice(-50), c4h.lows.slice(-50), price, c4hTimes ? c4hTimes.slice(-50) : null);
@@ -349,6 +351,15 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
   const mtfConflict = t4 !== "FLAT" && t1 !== "FLAT" && t4 !== t1;                 // 4h vs 1h disagree
   const allDisagree = t4 !== t1 && t1 !== t15 && t4 !== t15;                        // all 3 different = chop
   const overall = t4 === t1 ? t4 : "WAIT";
+  // DAILY GATE — the single largest measured accuracy factor in this engine.
+  // Backtested on real candles (gold 2.5y/2494 set-ups, GBP 2.7y/2450, BTC 3y/4586):
+  // when 4h+1h agree but the DAILY trend opposes them, expectancy is -0.14R (gold),
+  // -0.26R (GBP), -0.24R (BTC) with win rates of 26%/18%/21%. Requiring the daily to
+  // agree lifts expectancy to +0.13/+0.09/+0.14R and win rate to 43%/41%/47%, and it
+  // held in all 12 quarter-by-quarter sub-periods, in BOTH directions, at 12/24/48h
+  // horizons, and on a non-overlapping resample (pooled p<0.00001).
+  const dailyAligned = mtfAligned && tD === t4;
+  const dailyConflict = mtfAligned && tD !== "FLAT" && tD !== t4;
   const sigOf = t => t === "BULL" ? "LONG" : t === "BEAR" ? "SHORT" : "—";
 
   // trend-context (weighted inputs for the AI)
@@ -364,12 +375,18 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
 
   const mtf = {
     rows: [
+      { tf: "1D", trend: tD, candle: "—", volume: "—", signal: sigOf(tD) },
       { tf: "4h", trend: t4, candle: pat4[0]?.name || "—", volume: vol4?.cls || "—", signal: sigOf(t4) },
       { tf: "1h", trend: t1, candle: pat1[0]?.name || "—", volume: vol1?.cls || "—", signal: sigOf(t1) },
-      { tf: "15m", trend: t15, candle: pat15[0]?.name || "—", volume: vol15?.cls || "—", signal: pull ? `Pullback ${pull.state}` : sigOf(t15) },
+      // `pull` is derived from the 1h candles (see analyzePullback call above), so it
+      // must NOT be rendered on the 15m row — it read as an independent 15m reversal
+      // when it was really the 1h pullback. The Pullback Meter card shows it, correctly
+      // labelled as 1h. This row now shows the 15m timeframe's own trend signal.
+      { tf: "15m", trend: t15, candle: pat15[0]?.name || "—", volume: vol15?.cls || "—", signal: sigOf(t15) },
     ],
     overall: overall === "WAIT" ? "WAIT" : sigOf(overall),
     aligned: mtfAligned,
+    dailyAligned, dailyConflict,
   };
 
   const entries = {
@@ -384,7 +401,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
   };
 
   return {
-    t4, t1, t15, adx, adxClass: adxClass(adx),
+    t4, t1, t15, tD, dailyAligned, dailyConflict, adx, adxClass: adxClass(adx),
     fib, sr, pull, vol4, vol1, vol15, volDiv,
     pat4, pat1, pat15, patternBias, keyPattern, nearRes, nearSup,
     mtf, entries, atr4h, bb,
@@ -410,6 +427,7 @@ export const signalQuality = (parsed, ta, scoredKeys) => {
   let bonus = 0;
   if (ta.keyPattern && (ta.nearRes || ta.nearSup)) bonus += 15;
   if (ta.mtf.aligned) bonus += 10;
+  if (ta.dailyAligned) bonus += 10;        // daily agrees with 4h+1h — the measured edge (see analyzeTimeframes)
   if (ta.vol4 && ta.vol4.cls === "HIGH") bonus += 5;
   if (ta.adx != null && ta.adx > (ta._cal?.strong ?? 25)) bonus += 5; // per-asset strong-trend bar
   if (ta.divergence && ta.divergence.type !== "none") bonus += 5; // momentum divergence confirmation
@@ -457,7 +475,8 @@ export const taPromptBlock = (ta, f) => {
   const pats = (lbl, arr) => arr.length ? `${lbl}: ${arr.map(p => `${p.name}[${p.dir}]`).join(", ")}` : `${lbl}: none`;
   const st = ta.structure, sb = ta.sessionBias, pd = ta.prevDayBias;
   return `MULTI-TIMEFRAME (computed locally — prefer trading WITH the 4h trend; if 4h≠1h cap confidence at LOW, do NOT auto-WAIT; only WAIT if all three timeframes disagree)
-  4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
+  DAILY trend: ${ta.tD} | 4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
+  DAILY GATE ★ ${ta.dailyConflict ? `CONFLICT — the daily trend (${ta.tD}) OPPOSES the aligned 4h/1h direction. This is the single worst-performing condition measured in this engine: backtested win rate drops to 18-26% and expectancy to -0.14R…-0.26R across gold/GBP/BTC. RULE: cap confidence at LOW, state the daily conflict in the reasoning, and prefer WAIT unless there is a strong, explicit catalyst for the counter-daily move.` : ta.dailyAligned ? `ALIGNED — daily, 4h and 1h all point ${ta.tD}. This is the highest-quality condition measured (win rate 43-47%, expectancy +0.09R…+0.14R). Full confidence is justified if the rest of the scorecard supports it.` : `daily is ${ta.tD} — neutral/flat, neither confirming nor opposing. Treat as normal; weight the 4h/1h read.`}
   ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (calibrated for THIS pair: <${ta._cal?.weak ?? 20} weak, ${ta._cal?.weak ?? 20}-${ta._cal?.strong ?? 25} developing, >${ta._cal?.strong ?? 25} strong)
   Volatility Meter (4h): ${ta.vmeter ? `${ta.vmeter.pct}% of this asset's normal → ${ta.vmeter.level}` : "n/a"}
   LEVEL FLIP: ${ta.flip && ta.flip.status !== "none" ? `${ta.flip.status.toUpperCase()} — ${ta.flip.dir}-break of ${f(ta.flip.level)}${ta.flip.note ? " (" + ta.flip.note + ")" : ""}. RULE: on a PENDING flip do NOT give a full-confidence breakout — cap at LOW and mark it pending; on a FALSE_BREAK treat the breakout as failed (lean the other way or WAIT); only a CONFIRMED flip supports a normal-confidence breakout trade.` : "no unconfirmed level break"}

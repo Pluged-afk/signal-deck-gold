@@ -17,7 +17,9 @@ const ZONE_ADVICE = {
 const qCol = l => l === "VERY HIGH" || l === "HIGH" ? "#4ade80" : l === "MEDIUM" ? "#fbbf24" : "#f87171";
 const dirCol = d => d === "bullish" ? "#4ade80" : d === "bearish" ? "#f87171" : "#94a3b8";
 
-export default function TACards({ sig, T, pricePrefix = "", decimals = 2 }) {
+// waitBar = the asset's calibrated quality-WAIT bar (gold/BTC 35, GBP/USD 30) so the
+// caption states the real gate instead of a hardcoded 50.
+export default function TACards({ sig, T, pricePrefix = "", decimals = 2, waitBar = 35 }) {
   const ta = sig._ta;
   if (!ta) return null;
   const fp = v => v == null ? "—" : pricePrefix + Number(v).toFixed(decimals);
@@ -37,7 +39,7 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2 }) {
           <div style={{ height: 8, background: "#020617", borderRadius: 6, overflow: "hidden" }}>
             <div style={{ width: `${q.score}%`, height: "100%", background: qCol(q.label), transition: "width 0.4s" }} />
           </div>
-          <p style={{ fontSize: 9, color: "#475569", margin: "6px 0 0" }}>scorecard PASSes ×10 + bonuses (pattern@level +15, MTF aligned +10, high vol +5, ADX&gt;25 +5). &lt;50 = WAIT.</p>
+          <p style={{ fontSize: 9, color: "#475569", margin: "6px 0 0" }}>scorecard PASSes ×10 + bonuses (pattern@level +15, MTF aligned +10, high vol +5, strong ADX +5, divergence +5). &lt;{waitBar} = WAIT, &lt;50 = LOW confidence.</p>
         </div>
       )}
 

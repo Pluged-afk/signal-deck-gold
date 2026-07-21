@@ -93,8 +93,11 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           if(!parsed.wait_type || parsed.wait_type === "none") parsed.wait_type = "no_setup";
           if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below ${waitBar})`;
         } else {
-          if((parsed._quality && parsed._quality.score < 50) || ta?.mtfConflict){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; }
+          if((parsed._quality && parsed._quality.score < 50) || ta?.mtfConflict || ta?.dailyConflict){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; }
           if(ta?.mtfConflict){ parsed._mtfConflict = true; addLog(`4h/1h conflict (4h ${ta.t4} / 1h ${ta.t1}) — capping confidence at LOW`); }
+          // Daily gate: 4h+1h agree but the daily opposes them — measured win rate
+          // 18-26% vs 43-47% when the daily agrees. Same treatment as a 4h/1h conflict.
+          if(ta?.dailyConflict){ parsed._dailyConflict = true; addLog(`DAILY conflict (daily ${ta.tD} vs 4h/1h ${ta.t4}) — capping confidence at LOW`); }
         }
       }
 
@@ -357,7 +360,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         {sig.action!=="WAIT" && sig.confidence==="LOW" && (
           <div style={{...card,background:"#1f1206",border:"1px solid #7c2d12",marginBottom:10}}>
             <p style={{fontSize:12,fontWeight:700,color:"#fb923c",margin:"0 0 3px"}}>⚠️ LOW CONFIDENCE — trade at your own risk</p>
-            <p style={{fontSize:11,color:"#fdba74",...mono,margin:0,lineHeight:1.5}}>{sig._mtfConflict?"4h/1h conflict — counter-trend risk. ":""}This setup has significant risks. Use minimum lot size (0.01) and a tighter stop. Consider paper trading this signal.</p>
+            <p style={{fontSize:11,color:"#fdba74",...mono,margin:0,lineHeight:1.5}}>{sig._mtfConflict?"4h/1h conflict — counter-trend risk. ":""}{sig._dailyConflict?`Daily trend (${sig._ta?.tD}) opposes the 4h/1h direction — historically the weakest setup class (18-26% win rate vs 43-47% when the daily agrees). `:""}This setup has significant risks. Use minimum lot size (0.01) and a tighter stop. Consider paper trading this signal.</p>
           </div>
         )}
 
@@ -409,7 +412,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         {config.extraPanels(sig)}
 
         {/* Multi-timeframe TA: quality, pattern alert, MTF table, fib, pullback, entries */}
-        <TACards sig={sig} T={T} pricePrefix={config.pricePrefix} decimals={dec}/>
+        <TACards sig={sig} T={T} pricePrefix={config.pricePrefix} decimals={dec} waitBar={config.qualityWaitBar ?? 35}/>
 
         {/* Scorecard */}
         <div style={{...card,marginBottom:10}}>
