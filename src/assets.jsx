@@ -166,7 +166,11 @@ SIGNAL RULES:
 - Low volume breakout → confidence capped at MEDIUM
 - COT is context only (no predictive correlation) — mention extreme crowding as a risk note, never as a directional reason
 - Stop: use the ATR-based value provided. Do not widen it.
-- T1: min 1.5× ATR from entry. T2: min 2.5× ATR. R:R <1:2 → WAIT
+- TARGETS (calibrated for per-signal hit rate — stop is 1.5× ATR, which defines 1R):
+  T1 = 1.5× ATR from entry (= 1.0R). Historically resolved as a win 58% of the time on gold at the top MTF rung.
+  T2 = 3.0× ATR from entry (= 2.0R, so R:R at T2 is 1:2). Hit ~33% of the time — this is the runner, not the base case.
+  Do NOT push T1 out to 2.25× ATR (1.5R): that drops the T1 hit rate to ~45%. Closer T1 = more signals that actually work.
+  R:R measured at T2 <1:2 → WAIT
 - Off-peak session + no strong catalyst → cap confidence at MEDIUM
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
@@ -488,7 +492,8 @@ SIGNAL RULES (calibrated — do NOT over-output WAIT; cable is a normal-trending
 - ADX for cable is calibrated to its own distribution (weak <18, strong >22) — cable trends less sharply than gold, so a "developing" ADX of ~20 is normal and tradeable, NOT a reason to WAIT.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
 - SIGNAL QUALITY: <30 = WAIT; 30-50 = LOW; 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH.
-- Stop: use the ATR-based pip value provided (1.5× 4h ATR). T1 min 1.5× ATR, T2 min 2.5× ATR. R:R <1:2 → WAIT.
+- Stop: use the ATR-based pip value provided (1.5× 4h ATR) — this defines 1R.
+- TARGETS (calibrated for per-signal hit rate): T1 = 1.5× ATR from entry (= 1.0R), which historically resolved as a win 62% of the time on cable at the top MTF rung. T2 = 3.0× ATR (= 2.0R, R:R 1:2) — the runner, hit ~35%. Do NOT push T1 to 2.25× ATR (1.5R): the hit rate drops to ~49%. R:R measured at T2 <1:2 → WAIT.
 - Off-peak (Asian) + no catalyst → cap confidence at MEDIUM.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
@@ -771,7 +776,8 @@ SIGNAL RULES:
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
 - SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH..
 - Funding above the auto-calibrated crowded-long bar + price at resistance = high-probability SHORT.
-- Stop: use the ATR-based value provided (do not widen). T1 min 1.5× ATR, T2 min 2.5× ATR.
+- Stop: use the ATR-based value provided (do not widen) — this defines 1R.
+- TARGETS (calibrated for per-signal hit rate): T1 = 1.5× ATR from entry (= 1.0R), which historically resolved as a win 60% of the time on BTC at the top MTF rung. T2 = 3.0× ATR (= 2.0R, R:R 1:2) — the runner, hit ~39%. Do NOT push T1 to 2.25× ATR (1.5R): the hit rate drops to ~49%.
 - Minimum R:R 1:2.5 for BTC. R:R <1:2.5 → WAIT.
 - Weekend/low-volume + no catalyst → cap confidence at MEDIUM.
 

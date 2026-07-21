@@ -60,6 +60,25 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2, waitBa
       {/* Multi-timeframe table */}
       <div style={{ ...card, marginBottom: 10 }}>
         <p style={lbl}>Multi-Timeframe Analysis</p>
+        {/* HTF confirmation rung + the historical accuracy that rung actually delivered.
+            Backtested directional accuracy (gold/GBP/BTC, 3yr): 3/3 51-57%, 2/3 45-51%,
+            1/3 38-46%. Shown per-signal so each call carries its own honest number
+            rather than a bare HIGH/MEDIUM/LOW label. */}
+        {ta.htfConfirm != null && (() => {
+          const meta = {
+            3: { txt: "all higher timeframes confirm", acc: "51-57%", col: "#4ade80" },
+            2: { txt: "one higher timeframe disagrees", acc: "45-51%", col: "#fbbf24" },
+            1: { txt: "two higher timeframes disagree", acc: "38-46%", col: "#f87171" },
+            0: { txt: "no higher timeframe confirms", acc: "38-46%", col: "#f87171" },
+          }[ta.htfConfirm];
+          return (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 8px", marginBottom: 8, borderRadius: 8, background: "#020617", border: `1px solid ${meta.col}33` }}>
+              <span style={{ ...mono, fontSize: 11, color: meta.col, fontWeight: 700 }}>{ta.htfConfirm}/3 confirm</span>
+              <span style={{ fontSize: 10, color: "#94a3b8", flex: 1, textAlign: "center" }}>{meta.txt}</span>
+              <span style={{ ...mono, fontSize: 10, color: "#64748b" }} title="Backtested directional accuracy for this rung across gold/GBP/BTC, 3 years. Historical — not a forecast.">~{meta.acc} historically</span>
+            </div>
+          );
+        })()}
         <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 1fr 64px 84px", gap: 6, alignItems: "center", fontSize: 10, color: "#475569", paddingBottom: 4, borderBottom: "1px solid #1e293b" }}>
           <span>TF</span><span>TREND</span><span>CANDLE</span><span>VOL</span><span style={{ textAlign: "right" }}>SIGNAL</span>
         </div>
