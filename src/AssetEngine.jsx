@@ -98,13 +98,15 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           // Daily gate: 4h+1h agree but the daily opposes them — measured win rate
           // 18-26% vs 43-47% when the daily agrees. Same treatment as a 4h/1h conflict.
           if(ta?.dailyConflict){ parsed._dailyConflict = true; addLog(`DAILY conflict (daily ${ta.tD} vs 4h/1h ${ta.t4}) — capping confidence at LOW`); }
-          // Higher-timeframe ladder — how many of {1h, daily, weekly} confirm the 4h.
-          // Measured win rate by rung: 0/3 24-34%, 1/3 25-27%, 2/3 36-41%, 3/3 45-50%.
-          // Skipped entirely when daily candles are unavailable (htfConfirm === null).
-          if(ta?.htfConfirm != null){
-            parsed._htfConfirm = ta.htfConfirm;
-            if(ta.htfConfirm <= 1){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; addLog(`HTF ladder ${ta.htfConfirm}/3 confirm (1h ${ta.t1} / daily ${ta.tD} / weekly ${ta.tW} vs 4h ${ta.t4}) — capping confidence at LOW`); }
-            else if(ta.htfConfirm === 2 && parsed.confidence === "HIGH"){ parsed.confidence = "MEDIUM"; addLog(`HTF ladder 2/3 confirm — capping confidence at MEDIUM`); }
+          // Higher-timeframe tier — anchored on the DAILY, which measurement showed
+          // carries almost all the predictive power (the 1h carries none). Tier 0 =
+          // the daily dissents, regardless of how many lower timeframes agree.
+          // Measured win rate: tier 0 35-53% (negative expectancy), tiers 1-3 55-62%.
+          // Skipped entirely when daily candles are unavailable (htfTier === null).
+          if(ta?.htfTier != null){
+            parsed._htfTier = ta.htfTier;
+            if(ta.htfTier === 0){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; addLog(`HTF tier 0 — daily (${ta.tD}) does not confirm 4h ${ta.t4} — capping confidence at LOW`); }
+            else if(ta.htfTier < 3 && parsed.confidence === "HIGH"){ parsed.confidence = "MEDIUM"; addLog(`HTF tier ${ta.htfTier}/3 (daily confirms, ${3 - ta.htfTier} of 1h/weekly do not) — capping confidence at MEDIUM`); }
           }
         }
       }

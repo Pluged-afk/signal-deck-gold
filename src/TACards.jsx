@@ -51,8 +51,8 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2, waitBa
             {kp.name} <span style={{ color: "#64748b", fontWeight: 400 }}>on {kp.tf}</span> — {kp.dir}
           </p>
           <p style={{ ...mono, fontSize: 11, color: "#94a3b8", margin: 0 }}>
-            {ta.nearRes ? "at resistance" : ta.nearSup ? "at support" : "mid-range"} · volume {ta.vol1h?.cls || ta.vol4?.cls || "n/a"}
-            {ta.vol1h ? ` (${ta.vol1h.ratio.toFixed(1)}×)` : ""}
+            {ta.nearRes ? "at resistance" : ta.nearSup ? "at support" : "mid-range"} · volume {ta.vol1?.cls || ta.vol4?.cls || "n/a"}
+            {ta.vol1 ? ` (${ta.vol1.ratio.toFixed(1)}×)` : ""}
           </p>
         </div>
       )}
@@ -60,22 +60,23 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2, waitBa
       {/* Multi-timeframe table */}
       <div style={{ ...card, marginBottom: 10 }}>
         <p style={lbl}>Multi-Timeframe Analysis</p>
-        {/* HTF confirmation rung + the historical accuracy that rung actually delivered.
-            Backtested directional accuracy (gold/GBP/BTC, 3yr): 3/3 51-57%, 2/3 45-51%,
-            1/3 38-46%. Shown per-signal so each call carries its own honest number
-            rather than a bare HIGH/MEDIUM/LOW label. */}
-        {ta.htfConfirm != null && (() => {
+        {/* HTF tier + the historical accuracy that tier actually delivered. The tier is
+            anchored on the DAILY: measurement showed the daily carries almost all the
+            predictive power and the 1h essentially none, so "two timeframes agree" means
+            nothing if the daily is not one of them. Backtested directional accuracy
+            (gold/GBP/BTC, 3yr): tier 3 53-57%, tier 2 52-55%, tier 1 52-56%, tier 0 38-45%. */}
+        {ta.htfTier != null && (() => {
           const meta = {
-            3: { txt: "all higher timeframes confirm", acc: "51-57%", col: "#4ade80" },
-            2: { txt: "one higher timeframe disagrees", acc: "45-51%", col: "#fbbf24" },
-            1: { txt: "two higher timeframes disagree", acc: "38-46%", col: "#f87171" },
-            0: { txt: "no higher timeframe confirms", acc: "38-46%", col: "#f87171" },
-          }[ta.htfConfirm];
+            3: { txt: "daily, weekly and 1h all confirm", acc: "53-57%", col: "#4ade80" },
+            2: { txt: "daily confirms, one other agrees", acc: "52-55%", col: "#a3e635" },
+            1: { txt: "daily confirms, alone", acc: "52-56%", col: "#fbbf24" },
+            0: { txt: "DAILY DOES NOT CONFIRM — weakest class", acc: "38-45%", col: "#f87171" },
+          }[ta.htfTier];
           return (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 8px", marginBottom: 8, borderRadius: 8, background: "#020617", border: `1px solid ${meta.col}33` }}>
-              <span style={{ ...mono, fontSize: 11, color: meta.col, fontWeight: 700 }}>{ta.htfConfirm}/3 confirm</span>
+              <span style={{ ...mono, fontSize: 11, color: meta.col, fontWeight: 700 }}>tier {ta.htfTier}/3</span>
               <span style={{ fontSize: 10, color: "#94a3b8", flex: 1, textAlign: "center" }}>{meta.txt}</span>
-              <span style={{ ...mono, fontSize: 10, color: "#64748b" }} title="Backtested directional accuracy for this rung across gold/GBP/BTC, 3 years. Historical — not a forecast.">~{meta.acc} historically</span>
+              <span style={{ ...mono, fontSize: 10, color: "#64748b" }} title="Backtested directional accuracy for this tier across gold/GBP/BTC, 3 years. Historical — not a forecast.">~{meta.acc} historically</span>
             </div>
           );
         })()}
