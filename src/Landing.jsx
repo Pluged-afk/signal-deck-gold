@@ -11,12 +11,12 @@ const CARDS = [
     weekendRating:"poor",
   },
   {
-    id:"us500", name:"US 500", symbol:"S&P 500 CFD",
-    accent:"#0891b2", accentText:"#22d3ee", glyph:"▦",
-    desc:"S&P 500 index CFD. Driven by VIX, Fed policy, mega-cap earnings and yields. US Cash hours best — 4:30 PM–11:00 PM EGY.",
-    hours:"US Cash 13:30–20:00 UTC · Pre-market 08:00–13:30 UTC",
-    weekend:"Closed — index CFD, gap-prone",
-    weekendRating:"poor",
+    id:"gbp", name:"GBP / USD", symbol:"Cable",
+    accent:"#1e40af", accentText:"#93c5fd", glyph:"£",
+    desc:"Cable. Driven by BOE vs Fed policy, DXY and UK data (CPI/GDP/jobs). London/NY overlap best — 4:00–7:00 PM EGY.",
+    hours:"London Open 07–09 UTC · London/NY overlap 13–16 UTC",
+    weekend:"Thin — 25+ pip targets only",
+    weekendRating:"fair",
   },
   {
     id:"btc", name:"BITCOIN", symbol:"BTC/USD",

@@ -79,7 +79,9 @@ export const computeMarginal = (ta, events, nowMs = Date.now()) => {
     if (ta.mtfConflict || ta.allDisagree) c.push("MTF timeframes disagree");
     if (ta.volDiv) c.push("volume divergence");
     if (ta.pull && ["DEEP", "SEVERE", "FULL REVERSAL"].includes(ta.pull.state)) c.push(`pullback ${ta.pull.state}`);
-    if (ta.adx != null && ta.adx < 20) c.push(`ADX ${ta.adx.toFixed(0)} (<20)`);
+    const adxWeak = ta._cal?.weak ?? 20; // per-asset calibrated weak-trend bar
+    if (ta.adx != null && ta.adx < adxWeak) c.push(`ADX ${ta.adx.toFixed(0)} (<${adxWeak})`);
+    if (ta.flip && (ta.flip.status === "pending" || ta.flip.status === "false_break")) c.push(`${ta.flip.status === "false_break" ? "false break" : "unconfirmed flip"}`);
   }
   const be = (events || []).find(e => e.date && (e.date - nowMs) > 0 && (e.date - nowMs) <= 48 * 3600000);
   if (be) c.push(`${be.label} within 48h`);

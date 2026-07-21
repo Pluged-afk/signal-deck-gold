@@ -40,8 +40,9 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   // estimates remain the fallback. postNfp = within 2h of the ACTUAL release
   // time (catches holiday-shifted NFPs like Thu Jul 2).
   const fallbackEvents = upcomingEvents(config.events);
-  // All current assets (gold / US500 / BTC) key off USD macro events.
-  const { events, all: calAll, isLive, postNfp, refresh } = useLiveEvents(fallbackEvents, ["USD"]);
+  // Per-asset event currencies: GBP/USD watches USD + GBP; gold/BTC just USD.
+  const evCur = config.eventCurrencies || ["USD"];
+  const { events, all: calAll, isLive, postNfp, refresh } = useLiveEvents(fallbackEvents, evCur);
   // Only Gold's pipeline implements the post-NFP window handling.
   const nfpAsset = config.id === "gold";
   // Single live clock (Section 4): drives the debug timestamp + session labels.
@@ -53,7 +54,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     try{
       // Section 5: pull a fresh calendar so binary-event awareness is never stale.
       const freshAll = await refresh(false).catch(()=>null);
-      const evNow = freshAll ? upcomingLive(freshAll, ["USD"]) : events;
+      const evNow = freshAll ? upcomingLive(freshAll, evCur) : events;
       const { pkg, price, session, meta } = await config.pipeline({ keys, addLog, postNfp: nfpAsset ? postNfp : null });
 
       // HARD GATE (softened): only force WAIT + skip the paid call when ALL THREE
@@ -84,12 +85,13 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       // Softened gates: quality <35 forces WAIT; 35-50 OR a 4h/1h conflict still
       // fires but is capped at LOW confidence (trade-at-own-risk).
+      const waitBar = config.qualityWaitBar ?? 35; // per-asset calibrated (GBP/USD lower — it earns fewer vol bonuses)
       if(parsed.action !== "WAIT"){
-        if(parsed._quality && parsed._quality.score < 35){
-          addLog(`Signal quality ${parsed._quality.score}<35 — forcing WAIT`);
+        if(parsed._quality && parsed._quality.score < waitBar){
+          addLog(`Signal quality ${parsed._quality.score}<${waitBar} — forcing WAIT`);
           parsed.action = "WAIT";
           if(!parsed.wait_type || parsed.wait_type === "none") parsed.wait_type = "no_setup";
-          if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below 35)`;
+          if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below ${waitBar})`;
         } else {
           if((parsed._quality && parsed._quality.score < 50) || ta?.mtfConflict){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; }
           if(ta?.mtfConflict){ parsed._mtfConflict = true; addLog(`4h/1h conflict (4h ${ta.t4} / 1h ${ta.t1}) — capping confidence at LOW`); }
@@ -114,7 +116,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     // Section 5: force a fresh calendar pull so the pre-check's binary gate and
     // the event strip are computed from live data, not an earlier cached value.
     const freshAll = await refresh(true).catch(()=>null);
-    const evs = freshAll ? upcomingLive(freshAll, ["USD"]) : events;
+    const evs = freshAll ? upcomingLive(freshAll, evCur) : events;
     const res = await runPreCheck({ config, keys, events: evs });
     setPrechecking(false);
     setPrecheck({ ...res, ts:Date.now() });
@@ -156,7 +158,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       {headerExtra}
 
       {/* Section 5: always-on binary-event awareness strip (live, re-renders every 60s) */}
-      <EventStrip all={calAll} currencies={["USD"]} fallbackEvents={fallbackEvents} />
+      <EventStrip all={calAll} currencies={evCur} fallbackEvents={fallbackEvents} />
 
       {/* Post-NFP window (gold): live-feed-aware, active for 2h after release */}
       {nfpAsset && postNfp.active && (
@@ -301,6 +303,8 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
                 <span style={{...mono,fontSize:11,color:qCol(liveSession?.quality||sig.session_quality),padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>{liveSession?.label||sig.session}{(liveSession?.quality||sig.session_quality)?` · ${liveSession?.quality||sig.session_quality}`:""}</span>
                 {sig.passes!==undefined&&(()=>{const need=Math.ceil(config.passesOf*0.6);return <span style={{...mono,fontSize:11,color:sig.passes>=need?"#4ade80":sig.passes>=need-1?"#fbbf24":"#f87171"}}>{sig.passes}/{config.passesOf} confirmed</span>;})()}
                 {sig.signal_quality&&<span style={{...mono,fontSize:11,color:T.accentText,padding:"2px 7px",background:"#1e293b",border:"1px solid #334155",borderRadius:6}}>Q {sig.signal_quality}</span>}
+                {/* Section 3: per-asset Volatility Meter (4h ATR vs THIS asset's own 20-bar baseline) */}
+                {sig._vmeter&&(()=>{const v=sig._vmeter;const c=v.level==="LOW"?"#94a3b8":v.level==="NORMAL"?"#4ade80":v.level==="HIGH"?"#fb923c":"#f87171";return <span title="current 4h volatility vs this asset's own normal" style={{...mono,fontSize:11,color:c,padding:"2px 7px",background:"#1e293b",border:`1px solid ${v.level==="EXTREME"?"#dc2626":"#334155"}`,borderRadius:6}}>📊 Vol {v.pct}% · {v.level}</span>;})()}
                 {sig.action==="WAIT"&&sig.wait_type&&sig.wait_type!=="none"&&<span style={{...mono,fontSize:11,fontWeight:600,color:waitTypeMeta(sig.wait_type).col}}>{waitTypeMeta(sig.wait_type).label}</span>}
                 {(sig._sources||[]).map(s=><span key={s} style={{...mono,fontSize:10,color:"#4ade80"}}>✓ {s}</span>)}
               </div>
@@ -324,25 +328,19 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         {/* Section 3c: marginal-setup hero banner (visible regardless of confidence) */}
         <MarginalBanner conditions={sig._marginal}/>
 
-        {/* Delay-adjusting mechanism (US500 ONLY — set only by assets on a delayed
-            feed). Ticks the TRUE age of the shown price live off the one clock, and
-            shows a drift band = how far the live price may have moved during the
-            delay, so you act on "now" not a 10-min-old snapshot. */}
-        {sig._delay && sig._delay.asOf && (()=>{
-          const ageMin = Math.max(0, (now - sig._delay.asOf) / 60000);
-          const stale = ageMin > 60;
-          const band = sig._delay.atr1h != null ? sig._delay.atr1h * (ageMin / 60) : null;
-          const ageTxt = ageMin < 60 ? `${Math.floor(ageMin)}m ${String(Math.floor((ageMin % 1) * 60)).padStart(2,"0")}s` : `${(ageMin / 60).toFixed(1)}h`;
+        {/* Section 4: flip/breakout confirmation banner (all assets). A single-candle
+            level break isn't tradeable until the next candle confirms. */}
+        {sig._flip && (sig._flip.status==="pending"||sig._flip.status==="false_break") && (()=>{
+          const fb = sig._flip.status==="false_break";
           return (
-            <div style={{...card, background: stale?"#1a0505":"#1f1206", border:`1px solid ${stale?"#dc2626":"#7c2d12"}`, marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
-                <p style={{fontSize:12,fontWeight:700,color:stale?"#f87171":"#fb923c",margin:"0 0 3px"}}>⏱ This price is {ageTxt} old right now{stale?" — ⚠ STALE (US market likely closed)":""}</p>
-                {band!=null&&!stale&&<span style={{...mono,fontSize:12,fontWeight:700,color:"#fbbf24"}}>live ≈ {config.pricePrefix}{fmt(sig.price)} ±{band.toFixed(1)}</span>}
-              </div>
+            <div style={{...card, background: fb?"#1a0505":"#1f1206", border:`1px solid ${fb?"#dc2626":"#7c2d12"}`, marginBottom:10}}>
+              <p style={{fontSize:12,fontWeight:700,color:fb?"#f87171":"#fb923c",margin:"0 0 3px"}}>
+                {fb?"🚫 FALSE BREAK":"⏳ UNCONFIRMED FLIP — PENDING"} <span style={{...mono,fontWeight:400,fontSize:10,color:"#94a3b8"}}>({sig._flip.dir}-break of {config.pricePrefix}{fmt(sig._flip.level)})</span>
+              </p>
               <p style={{fontSize:11,color:"#fdba74",...mono,margin:0,lineHeight:1.5}}>
-                {stale
-                  ? "US market is likely closed — this price is frozen at the last session. Refresh when it reopens; don't act on these levels."
-                  : <>Free ES=F feed is ~10-15 min delayed{band!=null?` — at current volatility the live price may be ±${band.toFixed(1)} pts from these levels`:""}. Act on Pepperstone's CURRENT price (confirm your entry is still valid{band!=null?" within that band":""}); this snapshot is not live.</>}
+                {fb
+                  ? "The next candle reclaimed the level — the breakout failed. Don't chase it; the reversal side is favoured until proven otherwise."
+                  : "The level broke on the latest candle but isn't confirmed. Treat any breakout entry as LOW/pending until the next candle continues past it — a reclaim would make it a false break."}
               </p>
             </div>
           );

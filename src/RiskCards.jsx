@@ -118,7 +118,7 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
       </div>
       <p style={{ fontSize: 9, color: "#475569", margin: "8px 0 0", lineHeight: 1.5 }}>
         Time decay: if no clear move develops, close by session end rather than holding a stalling position.
-        {assetId === "us500" ? " US500: € figures assume 1 point = your Pepperstone €/point — confirm it before sizing." : ` € assumes ${riskPct}% risk on a €${Number(acct).toLocaleString()} account; scale with your size.`}
+        {assetId === "gbp" ? ` GBP/USD: 1 pip ≈ $0.10 (≈€0.09) at 0.01 lots — € below assumes ${riskPct}% risk on €${Number(acct).toLocaleString()}; confirm your exact €/pip with Pepperstone.` : ` € assumes ${riskPct}% risk on a €${Number(acct).toLocaleString()} account; scale with your size.`}
       </p>
     </div>
   );

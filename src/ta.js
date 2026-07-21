@@ -213,15 +213,17 @@ export const trendOf = closes => {
 };
 
 // ─── trend-context helpers (weighted inputs for the AI, not hard rules) ───────
-const trendStrength = (adx, adxPrev, closes) => {
+// bars = per-asset calibrated ADX thresholds (GBP/USD trends less sharply than
+// gold/BTC, so its weak/strong bars are lower — set from real ADX distribution).
+const trendStrength = (adx, adxPrev, closes, bars = { weak: 20, strong: 25 }) => {
   if (adx == null) return { label: "unknown", note: "ADX unavailable", mode: "trend" };
   const t = closes.slice(-4);
   const up = t.length === 4 && t[3] > t[2] && t[2] > t[1];
   const down = t.length === 4 && t[3] < t[2] && t[2] < t[1];
   const rising = adxPrev != null && adx > adxPrev + 1;
-  if (adx > 25 && (up || down)) return { label: "STRONG", note: `ADX ${adx.toFixed(0)} + ${up ? "3 up" : "3 down"} 4h candles — favour trend-following`, mode: "trend" };
-  if (adx < 20 && rising) return { label: "TRANSITIONING", note: `ADX ${adx.toFixed(0)} rising — trend developing, watch for breakout confirmation`, mode: "transition" };
-  if (adx < 20) return { label: "WEAK/RANGING", note: `ADX ${adx.toFixed(0)} — ranging market, favour mean-reversion (bounces not breakouts)`, mode: "range" };
+  if (adx > bars.strong && (up || down)) return { label: "STRONG", note: `ADX ${adx.toFixed(0)} + ${up ? "3 up" : "3 down"} 4h candles — favour trend-following`, mode: "trend" };
+  if (adx < bars.weak && rising) return { label: "TRANSITIONING", note: `ADX ${adx.toFixed(0)} rising — trend developing, watch for breakout confirmation`, mode: "transition" };
+  if (adx < bars.weak) return { label: "WEAK/RANGING", note: `ADX ${adx.toFixed(0)} — ranging market, favour mean-reversion (bounces not breakouts)`, mode: "range" };
   return { label: "MODERATE", note: `ADX ${adx.toFixed(0)} — developing`, mode: rising ? "transition" : "trend" };
 };
 
@@ -273,9 +275,52 @@ const sessionBias = (c1h, price) => {
   return { bias: pct >= 60 ? "bullish" : pct <= 40 ? "bearish" : "neutral", pct, hi, lo };
 };
 
+// ─── Volatility Meter (G3): current vs the asset's OWN recent baseline ────────
+// recent 5-bar avg true-range vs 20-bar avg true-range (4h) → a per-asset relative
+// read. An ATR% that's "normal" for BTC would be "extreme" for GBP, so this is
+// always measured against the same asset's own history, never a shared scale.
+export const volMeter = (highs, lows, closes, recent = 5, base = 20) => {
+  const n = closes.length;
+  if (n < base + 2) return null;
+  const tr = [];
+  for (let i = 1; i < n; i++) tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  const mean = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
+  const cur = mean(tr.slice(-recent)), avg = mean(tr.slice(-base));
+  if (!avg) return null;
+  const pct = Math.round(cur / avg * 100);
+  const level = pct < 70 ? "LOW" : pct <= 130 ? "NORMAL" : pct <= 200 ? "HIGH" : "EXTREME";
+  return { pct, level };
+};
+
+// ─── Flip confirmation (G4): a single-candle level break is only tradeable once
+// the NEXT candle confirms it. Returns pending / confirmed / false_break so the AI
+// won't hand out a full-confidence breakout on the triggering candle alone.
+export const flipCheck = (c4h, sr, atr4h) => {
+  const c = c4h.closes, n = c.length;
+  if (n < 3 || !atr4h) return { status: "none" };
+  const levels = [...(sr.resistance || []).map(r => r.level), ...(sr.support || []).map(s => s.level)];
+  if (!levels.length) return { status: "none" };
+  const c0 = c[n - 1], c1 = c[n - 2], c2 = c[n - 3];
+  const margin = atr4h * 0.15; // a "meaningful" close beyond the level (not a hair)
+  for (const lvl of levels) {
+    // prior candle (c1) closed through a level that c2 was on the other side of
+    const brokeUp = c2 <= lvl && c1 > lvl + margin, brokeDn = c2 >= lvl && c1 < lvl - margin;
+    if (brokeUp || brokeDn) {
+      const dir = brokeUp ? "up" : "down";
+      if (brokeUp) return c0 > c1 ? { status: "confirmed", dir, level: lvl } : c0 < lvl ? { status: "false_break", dir, level: lvl, note: "next candle reclaimed BELOW the level" } : { status: "pending", dir, level: lvl };
+      return c0 < c1 ? { status: "confirmed", dir, level: lvl } : c0 > lvl ? { status: "false_break", dir, level: lvl, note: "next candle reclaimed ABOVE the level" } : { status: "pending", dir, level: lvl };
+    }
+    // the LATEST candle just flipped — no confirmation candle yet
+    const nowUp = c1 <= lvl && c0 > lvl + margin, nowDn = c1 >= lvl && c0 < lvl - margin;
+    if (nowUp || nowDn) return { status: "pending", dir: nowUp ? "up" : "down", level: lvl, note: "flip on the latest candle — awaiting next-candle confirmation" };
+  }
+  return { status: "none" };
+};
+
 // ─── master aggregator ───────────────────────────────────────────────────────
-// Each c* = { opens, highs, lows, closes, volumes }
-export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevClose }) => {
+// Each c* = { opens, highs, lows, closes, volumes }. `cal` = per-asset calibrated
+// ADX bars ({weak,strong}); defaults to gold/BTC's 20/25 when omitted.
+export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevClose, cal }) => {
   // c1h and c4h are required (master timeframes); c15 is optional (entry timing).
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
   const adxR = calcADX(c4h.highs, c4h.lows, c4h.closes, 14);
@@ -307,8 +352,11 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
   const sigOf = t => t === "BULL" ? "LONG" : t === "BEAR" ? "SHORT" : "—";
 
   // trend-context (weighted inputs for the AI)
+  const adxBars = cal ? { weak: cal.adxWeak, strong: cal.adxStrong } : { weak: 20, strong: 25 };
   const adxPrevR = calcADX(c4h.highs.slice(0, -3), c4h.lows.slice(0, -3), c4h.closes.slice(0, -3), 14);
-  const strength = trendStrength(adx, adxPrevR ? adxPrevR.adx : null, c4h.closes);
+  const strength = trendStrength(adx, adxPrevR ? adxPrevR.adx : null, c4h.closes, adxBars);
+  const vmeter = volMeter(c4h.highs, c4h.lows, c4h.closes);
+  const flip = flipCheck(c4h, sr, atr4h);
   const structure = priceStructure(c4h.highs.slice(-60), c4h.lows.slice(-60));
   const divergence = detectDivergence(c4h.highs.slice(-40), c4h.lows.slice(-40), c4h.closes.slice(-40));
   const sBias = sessionBias(c1h, price);
@@ -342,6 +390,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
     mtf, entries, atr4h, bb,
     mtfConflict, allDisagree,
     strength, structure, divergence, sessionBias: sBias, prevDayBias: pdBias,
+    vmeter, flip, _cal: adxBars,
   };
 };
 
@@ -354,7 +403,7 @@ export const signalQuality = (parsed, ta) => {
   if (ta.keyPattern && (ta.nearRes || ta.nearSup)) bonus += 15;
   if (ta.mtf.aligned) bonus += 10;
   if (ta.vol4 && ta.vol4.cls === "HIGH") bonus += 5;
-  if (ta.adx != null && ta.adx > 25) bonus += 5;
+  if (ta.adx != null && ta.adx > (ta._cal?.strong ?? 25)) bonus += 5; // per-asset strong-trend bar
   if (ta.divergence && ta.divergence.type !== "none") bonus += 5; // momentum divergence confirmation
   const score = Math.min(100, pts + bonus);
   const label = score < 35 ? "WAIT" : score < 50 ? "LOW" : score < 70 ? "MEDIUM" : score < 85 ? "HIGH" : "VERY HIGH";
@@ -401,7 +450,9 @@ export const taPromptBlock = (ta, f) => {
   const st = ta.structure, sb = ta.sessionBias, pd = ta.prevDayBias;
   return `MULTI-TIMEFRAME (computed locally — prefer trading WITH the 4h trend; if 4h≠1h cap confidence at LOW, do NOT auto-WAIT; only WAIT if all three timeframes disagree)
   4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
-  ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (${"<20 weak, 20-25 developing, >25 strong"})
+  ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (calibrated for THIS pair: <${ta._cal?.weak ?? 20} weak, ${ta._cal?.weak ?? 20}-${ta._cal?.strong ?? 25} developing, >${ta._cal?.strong ?? 25} strong)
+  Volatility Meter (4h): ${ta.vmeter ? `${ta.vmeter.pct}% of this asset's normal → ${ta.vmeter.level}` : "n/a"}
+  LEVEL FLIP: ${ta.flip && ta.flip.status !== "none" ? `${ta.flip.status.toUpperCase()} — ${ta.flip.dir}-break of ${f(ta.flip.level)}${ta.flip.note ? " (" + ta.flip.note + ")" : ""}. RULE: on a PENDING flip do NOT give a full-confidence breakout — cap at LOW and mark it pending; on a FALSE_BREAK treat the breakout as failed (lean the other way or WAIT); only a CONFIRMED flip supports a normal-confidence breakout trade.` : "no unconfirmed level break"}
 
 TREND CONTEXT (weighted inputs — improve direction accuracy, not hard rules)
   Trend strength: ${ta.strength.label} — ${ta.strength.note}

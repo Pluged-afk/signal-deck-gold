@@ -69,28 +69,19 @@ export const getFxSession = () => {
   return { label:"Asian / Off-Peak", quality:"avoid" };
 };
 
-// US500 (S&P 500 index CFD) — driven by the US EQUITY clock, not the FX clock.
-// Uses ACTUAL US Eastern time (DST-correct via Intl) for cash/pre-market so the
-// windows convert to EGY correctly in summer AND winter, rather than reusing the
-// FX/crypto UTC windows verbatim. Cash 9:30–16:00 ET is best; pre-market GOOD;
-// overnight/Globex thin → avoid; the ~23:00–24:00 EGY maintenance hour is closed.
-export const getUS500Session = () => {
-  const now = new Date();
-  const day = now.getUTCDay();
-  const egyH = (now.getUTCHours() + 3) % 24;
-  // Index CFD is effectively closed over the weekend (thin/gap-prone).
-  if (day === 6 || day === 0) return { label: "Weekend — index closed", quality: "avoid" };
-  // Daily maintenance halt (~11 PM–12 AM EGY / 20:00–21:00 UTC) — mark closed.
-  if (egyH === 23) return { label: "Maintenance halt — closed", quality: "avoid" };
-  let etMins = null;
-  try {
-    const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-    if (!isNaN(et)) etMins = et.getHours() * 60 + et.getMinutes();
-  } catch (_) {}
-  if (etMins == null) return { label: "US session (ET clock unavailable)", quality: "ok" };
-  if (etMins >= 9 * 60 + 30 && etMins < 16 * 60) return { label: "US Cash", quality: "best" };
-  if (etMins >= 4 * 60 && etMins < 9 * 60 + 30) return { label: "Pre-market", quality: "good" };
-  return { label: "Overnight / Globex", quality: "avoid" };
+// GBP/USD ("cable") — LONDON-centric clock, distinct from gold's FX map. Cable's
+// primary liquidity is the London open (07:00 UTC) and the London/NY overlap
+// (13:00–16:00 UTC). The Asian session (21:00–07:00 UTC) is genuinely thin for
+// cable — more so than gold — so it is rated AVOID, not just "ok".
+export const getGbpSession = () => {
+  const h = new Date().getUTCHours(), d = new Date().getUTCDay();
+  if (d === 6 || (d === 0 && h < 21)) return { label: "Weekend", quality: "avoid" };
+  if (h >= 7 && h < 9)   return { label: "London Open",       quality: "best" }; // cable's own primary window
+  if (h >= 9 && h < 13)  return { label: "London Session",    quality: "good" };
+  if (h >= 13 && h < 16) return { label: "London/NY Overlap", quality: "best" };
+  if (h >= 16 && h < 17) return { label: "US Afternoon",      quality: "good" };
+  if (h >= 17 && h < 21) return { label: "US Late",           quality: "ok"   };
+  return { label: "Asian — thin for cable", quality: "avoid" }; // 21:00–07:00 UTC
 };
 
 // Crypto trades 24/7 — different quality map, weekend is "ok" not "avoid".
@@ -202,6 +193,9 @@ const firstFriday = (y,m) => { const d=new Date(Date.UTC(y,m,1)); const off=(5-d
 const FOMC_2026 = ["2026-01-28","2026-03-18","2026-04-29","2026-06-17","2026-07-29","2026-09-16","2026-10-28","2026-12-09"];
 // 2026 ECB monetary-policy Governing Council decision dates (confirmed).
 const ECB_2026  = ["2026-01-30","2026-03-06","2026-04-17","2026-06-05","2026-07-24","2026-09-11","2026-10-30","2026-12-18"];
+// 2026 BOE Bank of England MPC decision dates (approx — 8/year; live calendar is
+// the real gate). Cable moves hard on these — weighted like FOMC for GBP/USD.
+const BOE_2026  = ["2026-02-05","2026-03-19","2026-05-07","2026-06-18","2026-08-06","2026-09-17","2026-11-05","2026-12-17"];
 
 const nextMonthly = (dayFn) => {
   const now=new Date(); let y=now.getUTCFullYear(), m=now.getUTCMonth();
@@ -227,6 +221,12 @@ const EVENT_DEFS = {
   FOMC: { label:"FOMC rate decision",    next:()=>nextFromList(FOMC_2026) },
   ECB:  { label:"ECB rate decision",     next:()=>nextFromList(ECB_2026) },
   EUCPI:{ label:"Eurozone CPI (flash)",  next:()=>nextMonthly(()=>1), approx:true },
+  // UK / GBP events (cable-specific) — BOE mirrors the FOMC cadence; UK data prints
+  // mid-month. Cable often moves outsized on these even when the USD side is quiet.
+  BOE:  { label:"BOE rate decision",     next:()=>nextFromList(BOE_2026) },
+  UKCPI:{ label:"UK CPI (inflation)",    next:()=>nextMonthly(()=>16), approx:true },
+  UKGDP:{ label:"UK GDP",                next:()=>nextMonthly(()=>12), approx:true },
+  UKEMP:{ label:"UK employment/wages",   next:()=>nextMonthly(()=>15), approx:true },
 };
 
 export const upcomingEvents = (types, n=3) => {
@@ -271,7 +271,7 @@ export const inWindow = win => {
 // the legacy in-browser path. Defaults ON (secure). Flip an asset to false only
 // as part of a deliberate, verified rollback (see runAI + the audit report).
 export const PROXY_DATA = true;
-export const SIGNAL_PROXY = { gold: true, us500: true, btc: true };
+export const SIGNAL_PROXY = { gold: true, gbp: true, btc: true };
 export const signalProxyEnabled = id => SIGNAL_PROXY[id] !== false;
 
 // Wrap a keyed upstream URL so the request goes through the same-origin proxy
@@ -451,7 +451,7 @@ triggers — be SPECIFIC and ACTIONABLE. Use the pre-computed swing S/R, fib lev
 For LONG/SHORT: watch_long/watch_short may be "n/a", but invalidation, invalidation_note, news_time/news_event and a refresh_recommendation (e.g. "hold; re-check at the next 4h close or if price hits the invalidation level") are still REQUIRED.`;
 
 // ─── Accuracy & honesty rules (Sections 3b + 3e) — appended to every asset ────
-// Applied IDENTICALLY to Gold, BTC and US500 so the three engines stay in sync.
+// Applied IDENTICALLY to Gold, BTC and GBP/USD so the three engines stay in sync.
 export const ACCURACY_RULES = `
 
 ═══ MULTIPLE SCENARIO OUTPUT — REQUIRED ON EVERY RESPONSE (LONG, SHORT and WAIT) ═══
@@ -462,7 +462,10 @@ Markets branch. In addition to your main call you MUST map the two realistic alt
 Use the pre-computed levels (fib, swing S/R, PDH/PDL, round numbers, BB bands) as the concrete trigger/confirm prices. These are REAL branches, not a hedge — only one will occur; you are not predicting which.
 
 ═══ HONEST CONFIDENCE LANGUAGE — REQUIRED ═══
-Use probabilistic, non-deterministic language everywhere (reasoning, notes, scenarios). NEVER use "will", "guaranteed", "certain", "confirmed move", "definitely", "always/never happens". Prefer "likely", "favoured", "elevated probability", "leans", "suggests", "risk of". Confidence reflects how well the data ALIGNS — it is NOT a probability of profit. Losing trades are a normal, expected outcome of any edge. Do not imply certainty of outcome in any field.`;
+Use probabilistic, non-deterministic language everywhere (reasoning, notes, scenarios). NEVER use "will", "guaranteed", "certain", "confirmed move", "definitely", "always/never happens". Prefer "likely", "favoured", "elevated probability", "leans", "suggests", "risk of". Confidence reflects how well the data ALIGNS — it is NOT a probability of profit. Losing trades are a normal, expected outcome of any edge. Do not imply certainty of outcome in any field.
+
+═══ FLIP / BREAKOUT CONFIRMATION — REQUIRED ═══
+A single candle closing through a key level is NOT a confirmed breakout. If the pre-computed LEVEL FLIP status is PENDING (broke on the latest candle, no confirmation yet), do NOT output a full-confidence breakout trade — cap confidence at LOW, describe it as pending, and set the trigger to the next candle's continuation. If it is FALSE_BREAK (the next candle reclaimed the level), treat the breakout as FAILED — explicitly say "FALSE BREAK" and lean the opposite way or WAIT. Only a CONFIRMED flip (next candle continued past the level with margin) supports a normal-confidence breakout entry.`;
 
 // Permanent risk footer shown on every signal (Section 3e).
 export const PERMANENT_FOOTER =
