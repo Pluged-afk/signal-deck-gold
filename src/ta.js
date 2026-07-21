@@ -395,10 +395,18 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c4hTimes, price, atr4h, prevC
 };
 
 // ─── signal-quality score 0–100 (scorecard PASSes + local bonuses) ──────────
-export const signalQuality = (parsed, ta) => {
+// `scoredKeys` = the asset's actual scorecard rows. Anything outside that set
+// (e.g. a demoted item like COT/dominance the model emitted anyway) is IGNORED —
+// otherwise a stray PASS would inflate the score by 10 each and could flip a
+// forced-WAIT into a tradeable signal.
+export const signalQuality = (parsed, ta, scoredKeys) => {
   const sc = parsed.scorecard || {};
+  const allow = (scoredKeys && scoredKeys.length) ? new Set(scoredKeys) : null;
   let pts = 0;
-  Object.values(sc).forEach(it => { if (it && (it.r === "PASS" || it.r === "BULLISH")) pts += 10; });
+  Object.entries(sc).forEach(([k, it]) => {
+    if (allow && !allow.has(k)) return;
+    if (it && (it.r === "PASS" || it.r === "BULLISH")) pts += 10;
+  });
   let bonus = 0;
   if (ta.keyPattern && (ta.nearRes || ta.nearSup)) bonus += 15;
   if (ta.mtf.aligned) bonus += 10;

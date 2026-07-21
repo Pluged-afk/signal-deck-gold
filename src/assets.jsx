@@ -13,8 +13,8 @@ import { analyzeTimeframes, signalQuality, taPromptBlock } from "./ta";
 
 // Two scorecard rows shared by every asset (multi-timeframe + candle patterns).
 const TA_ROWS = [
-  { key:"candles", label:"9. Candle Patterns" },
-  { key:"mtf",     label:"10. MTF Alignment (4h/1h/15m)" },
+  { key:"candles", label:"8. Candle Patterns" },
+  { key:"mtf",     label:"9. MTF Alignment (4h/1h/15m)" },
 ];
 
 const ff = v => (v||v===0) ? v.toFixed(5) : "n/a"; // forex 5-dp formatter
@@ -30,12 +30,20 @@ const Stat = ({ title, value, color="#e2e8f0", sub }) => (
 
 // Inject locally-computed TA into the parsed signal for the UI, compute the
 // 0–100 quality score, and backfill S/R from swing levels if the AI left blanks.
-function mergeTA(p, ta, fnum) {
+// `scoredKeys` = this asset's scorecard row keys. Passed through so quality and the
+// "X/N confirmed" badge are computed ONLY from real scored rows — a demoted item the
+// model emits anyway (COT, dominance, …) must not add points.
+function mergeTA(p, ta, fnum, scoredKeys) {
   if (!ta) return;
   p._ta = ta;
-  const q = signalQuality(p, ta);
+  const q = signalQuality(p, ta, scoredKeys);
   p.signal_quality = `${q.score}/100`;
   p._quality = q;
+  if (scoredKeys && scoredKeys.length) {
+    const allow = new Set(scoredKeys);
+    p.passes = Object.entries(p.scorecard || {})
+      .filter(([k, it]) => allow.has(k) && it && (it.r === "PASS" || it.r === "BULLISH")).length;
+  }
   if ((!p.support || p.support === "") && ta.sr.support[0]) p.support = fnum(ta.sr.support[0].level);
   if ((!p.resistance || p.resistance === "") && ta.sr.resistance[0]) p.resistance = fnum(ta.sr.resistance[0].level);
   if (!p.entry_type && ta.entries) p.entry_type = ta.entries.recommended;
@@ -48,7 +56,7 @@ function mergeTA(p, ta, fnum) {
 // ASSET 1 — GOLD (XAU/USD) — 10-step engine with multi-timeframe TA
 // ════════════════════════════════════════════════════════════════════════════
 const GOLD = {
-  id:"gold", name:"SIGNAL DECK GOLD", symbol:"XAU/USD", headerNote:"XAU/USD · 8-Step · Real APIs",
+  id:"gold", name:"SIGNAL DECK GOLD", symbol:"XAU/USD", headerNote:"XAU/USD · 9-Step · Real APIs",
   pricePrefix:"$",
   theme:{ accent:"#ca8a04", accentText:"#fbbf24", panelBg:"#1c1408", panelBorder:"#78350f", loader:"#ca8a04" },
   keyFields:[
@@ -75,18 +83,21 @@ const GOLD = {
   riskRules:[
     "Max 1-2% of account at risk per trade","ATR-based stop is pre-calculated — do not widen it",
     "Price already 25%+ toward T1 → skip, wait for pullback","T1 hit → close 50%, move stop to entry immediately",
-    "Exit 100% before any FOMC / CPI / NFP / PCE release","COT net >200k + resistance = high SHORT probability — respect it",
+    "Exit 100% before any FOMC / CPI / NFP / PCE release","COT is context only (no measured predictive edge) — treat extreme crowding as size risk, not a trade signal",
   ],
-  scTitle:"10-Step Scorecard", passesOf:10,
+  // 9-step (was 10): MACD+RSI merged into one momentum slot (0.61 correlated —
+  // redundant), COT demoted to context-only (0.02 corr with next-week direction),
+  // and the freed slot given to DXY/real-yield MOMENTUM (gold's strongest leading
+  // input, +18pp regime edge on the 200MA / macro block).
+  scTitle:"9-Step Scorecard", passesOf:9,
   scRows:[
     { key:"price",     label:"1. Price & VWAP" },
-    { key:"macd",      label:"2. MACD 1h/4h/Daily" },
-    { key:"rsi_ma",    label:"3. RSI 80/20 + 200MA" },
-    { key:"volume",    label:"4. Volume Confirmation" },
-    { key:"dxy_yield", label:"5. DXY + Real Yield" },
-    { key:"cot",       label:"6. COT Positioning" },
-    { key:"history",   label:"7. Levels / Context" },
-    { key:"news",      label:"8. News / Macro" },
+    { key:"momentum",  label:"2. Momentum (MACD+RSI+200MA)" },
+    { key:"volume",    label:"3. Volume Confirmation" },
+    { key:"dxy_yield", label:"4. DXY + Real Yield (level)" },
+    { key:"dxy_mom",   label:"5. DXY/Yield Momentum ★" },
+    { key:"history",   label:"6. Levels / Context" },
+    { key:"news",      label:"7. News / Macro" },
     ...TA_ROWS,
   ],
   readyLines:(k)=>[
@@ -116,7 +127,7 @@ const GOLD = {
         <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(s.real_yield)}</p></div>
       </div>
       <div style={card}>
-        <p style={lbl}>COT Positioning <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· CFTC weekly</span></p>
+        <p style={lbl}>COT Positioning <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· CFTC weekly · CONTEXT ONLY (not scored)</span></p>
         <Stat title="Managed Money Net (hedge funds)" value={`${fmt(s.cot_net)} contracts`}/>
         <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Sentiment</p>
         <p style={{...mono,fontSize:12,margin:0,color:s.cot_sentiment==="CROWDED_LONG"?"#f87171":s.cot_sentiment==="CROWDED_SHORT"?"#4ade80":"#94a3b8"}}>{fmt(s.cot_sentiment)}</p></div>
@@ -133,15 +144,15 @@ YOUR JOB (web search only for these):
 3. MACRO CONTEXT: FOMC/CPI/NFP/PCE within 48h? Fed speakers today? Geopolitical events?
 4. BIAS SYNTHESIS: All pre-computed data + research → highest-probability directional bias.
 
-8-STEP SCORECARD RULES:
+7-STEP SCORECARD RULES (+2 TA rows = 9 scored items):
 1. PRICE & VWAP: Upper/lower third of 24h range AND above/below VWAP → same direction = PASS.
-2. MACD MULTI-TF: 1h+4h+Daily all above signal = PASS LONG. All below = PASS SHORT. 2/3 = NEUTRAL. 1/3 or 0/3 = FAIL.
-3. RSI + 200MA (GOLD-CALIBRATED 80/20): RSI 50-80 + price above 200MA = PASS LONG. RSI 20-50 + below 200MA = PASS SHORT. Extremes (>80 or <20) = NEUTRAL for entry. Gold runs hotter than forex — do NOT treat 70/30 as extreme; only 80/20 counts as overbought/oversold for gold.
-4. VOLUME: Ratio >1.5x avg = PASS (confirms). 0.8-1.5x = NEUTRAL. <0.8x = FAIL (weak move).
-5. DXY + REAL YIELD: Both falling = PASS LONG. Both rising = PASS SHORT. Conflict = NEUTRAL.
-6. COT: Net MM <100k = room for longs = PASS LONG. Net >200k = crowded = FAIL LONG/PASS SHORT. 100-200k = NEUTRAL.
-7. LEVELS: Price within 0.3% of key structural support (LONG) or resistance (SHORT) = PASS. Middle of range = FAIL.
-8. NEWS: Confirmed bullish catalyst = PASS. Bearish = FAIL. Unclear = NEUTRAL.
+2. MOMENTUM (MACD + RSI + 200MA — ONE combined slot): MACD and RSI are ~0.61 correlated, so they are scored TOGETHER, not as two independent confirmations. PASS LONG when the 1h/4h/Daily MACD lean is bullish AND RSI is 50-80 AND price is above the 200MA. PASS SHORT when MACD lean bearish AND RSI 20-50 AND price below the 200MA. Mixed = NEUTRAL. RSI extremes (>80 or <20) = NEUTRAL for entry — gold is GOLD-CALIBRATED 80/20 (verified: gold KEEPS RISING at RSI>70 and only reverses above 80; never treat 70/30 as extreme for gold). Do NOT treat MACD and RSI agreeing as two separate confirmations.
+3. VOLUME: Ratio >1.5x avg = PASS (confirms). 0.8-1.5x = NEUTRAL. <0.8x = FAIL (weak move).
+4. DXY + REAL YIELD (LEVEL/direction): Both falling = PASS LONG. Both rising = PASS SHORT. Conflict = NEUTRAL.
+5. DXY/REAL-YIELD MOMENTUM ★ (gold's strongest leading input — weight this above the price-derived rows): use the MACRO MOMENTUM block. Both changes negative (DXY and real yield falling) = PASS LONG. Both positive = PASS SHORT. Mixed = NEUTRAL. This is rate-of-change, and it leads price — prefer it over lagging momentum when they conflict.
+6. LEVELS: Price within 0.3% of key structural support (LONG) or resistance (SHORT) = PASS. Middle of range = FAIL.
+7. NEWS: Confirmed bullish catalyst = PASS. Bearish = FAIL. Unclear = NEUTRAL.
+(COT is NOT scored — it is context only. Do not create a "cot" scorecard entry.)
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. An event that has ALREADY RELEASED does NOT force WAIT: once 30+ minutes have passed since release, trade the post-event trend normally (use the POST-NFP guidance when provided). Never output wait_type binary_event for a past release.
@@ -149,16 +160,17 @@ SIGNAL RULES:
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
 - SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH.
-- Three-timeframe MACD alignment is a strong standalone signal — weight it heavily
+- MACD is a LAGGING confirmer (measured ~0 standalone directional edge on gold) — it confirms what price already did. Never treat it as leading, and never as independent confirmation alongside RSI (they are ~0.61 correlated and share one scored slot).
+- DXY/real-yield MOMENTUM is the strongest LEADING input — when it conflicts with the lagging momentum row, favour the momentum row's direction and cap confidence at MEDIUM.
 - DXY and yield conflict → confidence capped at MEDIUM
 - Low volume breakout → confidence capped at MEDIUM
-- COT net >200k + price at resistance = high-probability SHORT
+- COT is context only (no predictive correlation) — mention extreme crowding as a risk note, never as a directional reason
 - Stop: use the ATR-based value provided. Do not widen it.
 - T1: min 1.5× ATR from entry. T2: min 2.5× ATR. R:R <1:2 → WAIT
 - Off-peak session + no strong catalyst → cap confidence at MEDIUM
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","dxy_nfp":"post-NFP DXY reaction or empty","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"cot":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
+{"action":"LONG|SHORT|WAIT","price":"XXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXX.XX","entry_note":"brief","stop":"XXXX.XX","stop_note":"ATR-based","stop_pct":"0.7","t1":"XXXX.XX","t2":"XXXX.XX","rr":"1:2.5","high_24h":"XXXX.XX","low_24h":"XXXX.XX","vwap":"XXXX.XX","support":"XXXX.XX","resistance":"XXXX.XX","ma200":"XXXX.XX","dxy":"XXX.XX","dxy_nfp":"post-NFP DXY reaction or empty","real_yield":"X.XX%","cot_net":"XXXXX","cot_sentiment":"NEUTRAL","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"momentum":{"r":"PASS|FAIL|NEUTRAL","note":"MACD+RSI+200MA combined"},"volume":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dxy_yield":{"r":"PASS|FAIL|NEUTRAL","note":"level/direction"},"dxy_mom":{"r":"PASS|FAIL|NEUTRAL","note":"DXY/real-yield rate-of-change"},"history":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXX — close 50% move stop to entry","T2 $XXXX — close rest","Stop $XXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
   pipeline: async ({ keys, addLog, postNfp }) => {
     const tdCandles = async (interval, outputsize=100) => {
@@ -169,7 +181,10 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     };
     // Returns latest value + direction vs the prior reading (we already fetch 5
     // observations — direction was being thrown away, yet the scorecard rules on it).
-    const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
+    // Latest value + direction vs prior + MOMENTUM (change across the whole window).
+    // The audit showed DXY/real-yield are gold's strongest leading inputs, so their
+    // rate-of-change is scored, not just their level.
+    const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=8`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null, older=vals.length?vals[vals.length-1]:null; return { v, prev, older, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown", chg:(v!=null&&older!=null)?v-older:null }; };
 
     addLog("Fetching spot price...");
     let spot=null, sqMid=null;
@@ -205,21 +220,11 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
         // round numbers within $30 (gold respects these strongly)
         const rounds=[]; for(let r=Math.floor((spot.price-30)/25)*25; r<=spot.price+30; r+=25){ if(r%50===0&&Math.abs(r-spot.price)<=30) rounds.push(r); }
-        // PDH/PDL (yesterday's completed daily candle) + liquidity-sweep detection
-        // (same pattern as EUR's Asian-range sweep, applied to gold's PDH/PDL)
+        // PDH/PDL (yesterday's completed daily candle) kept as reference LEVELS only.
+        // The liquidity-sweep alert was REMOVED: it fired ~2.6x/day and its reversal
+        // hit-rate was 49% (coinflip) over 3 months of 1h gold — confirmed noise.
         const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
         const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
-        let sweep=null, nearPD=null;
-        if(pdh!=null&&pdl!=null){
-          for(let i=Math.max(0,c1h.closes.length-3);i<c1h.closes.length;i++){
-            if(c1h.highs[i]>pdh&&c1h.closes[i]<pdh) sweep={level:pdh,side:"PDH",note:"bearish reversal setup — watch SHORT"};
-            else if(c1h.lows[i]<pdl&&c1h.closes[i]>pdl) sweep={level:pdl,side:"PDL",note:"bullish reversal setup — watch LONG"};
-          }
-          if(!sweep){
-            if(Math.abs(spot.price-pdh)<=5) nearPD={level:pdh,side:"PDH"};
-            else if(Math.abs(spot.price-pdl)<=5) nearPD={level:pdl,side:"PDL"};
-          }
-        }
         // current 1h true-range vs ATR(20) — elevated/extreme volatility flag
         const li1=c1h.closes.length-1;
         const trNow=Math.max(c1h.highs[li1]-c1h.lows[li1],Math.abs(c1h.highs[li1]-c1h.closes[li1-1]),Math.abs(c1h.lows[li1]-c1h.closes[li1-1]));
@@ -233,7 +238,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
           if(idx>=0){ nfpMove=p2(spot.price-c1h.opens[idx]); nfpLarge=Math.abs(nfpMove)>40; }
         }
         const volFading=vol1h&&c1h.volumes[li1]<c1h.volumes[li1-1]&&vol1h.average&&(c1h.volumes[li1-1]/vol1h.average)>1.5;
-        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, pdh,pdl,sweep,nearPD, volRatio,nfpMove,nfpLarge,volFading, bullMacd:bull, bearMacd:3-bull };
+        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, pdh,pdl, volRatio,nfpMove,nfpLarge,volFading, bullMacd:bull, bearMacd:3-bull };
         ta=analyzeTimeframes({ c15, c1h, c4h, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
         addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
@@ -244,12 +249,22 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       addLog("Fetching FRED yields + DXY in parallel...");
       const [nominal,tips,dxy]=await Promise.all([fred("DGS10"),fred("T10YIE"),fred("DTWEXBGS")]);
       macro.nominal=nominal.v; macro.tips=tips.v; macro.dxy=dxy.v; macro.dxyDir=dxy.dir;
+      // MOMENTUM (scored slot 5): rate-of-change across the ~8-obs window, not just level.
+      macro.dxyChg=dxy.chg!=null?p2(dxy.chg):null;
+      macro.dxyChgPct=(dxy.chg!=null&&dxy.older)?p2(dxy.chg/dxy.older*100):null;
       if(nominal.v!=null&&tips.v!=null){
         macro.realYield=p2(nominal.v-tips.v);
         const ryPrev=(nominal.prev!=null&&tips.prev!=null)?nominal.prev-tips.prev:null;
         macro.realYieldDir=ryPrev!=null?(macro.realYield>p2(ryPrev)?"RISING":macro.realYield<p2(ryPrev)?"FALLING":"FLAT"):"unknown";
+        const ryOld=(nominal.older!=null&&tips.older!=null)?nominal.older-tips.older:null;
+        macro.realYieldChg=ryOld!=null?p2(macro.realYield-ryOld):null;
       }
-      addLog(`FRED → real:${macro.realYield}% (${macro.realYieldDir||"?"}) DXY:${macro.dxy} (${macro.dxyDir})`);
+      // Combined momentum read — both falling = strongest gold tailwind, both rising = headwind.
+      const dm=macro.dxyChg, rm=macro.realYieldChg;
+      macro.momentum=(dm!=null&&rm!=null)
+        ? (dm<0&&rm<0?"BOTH FALLING — strong bullish-gold tailwind":dm>0&&rm>0?"BOTH RISING — strong bearish-gold headwind":"MIXED — no combined macro thrust")
+        : "unavailable";
+      addLog(`FRED → real:${macro.realYield}% (${macro.realYieldDir||"?"}, Δ${macro.realYieldChg}) DXY:${macro.dxy} (${macro.dxyDir}, Δ${macro.dxyChg}) → ${macro.momentum}`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
     addLog("Fetching COT (CFTC — COMEX gold managed money)...");
@@ -296,15 +311,19 @@ VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h
 
 ATR & STOP  1h:$${f2(td?.atr1h)} | 4h:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na(stopPct)}%)
 
-MACRO — FRED (with direction vs prior reading — scorecard rule 5 uses DIRECTION: both FALLING = PASS LONG, both RISING = PASS SHORT)
+MACRO — FRED · LEVEL (scorecard row 4 uses DIRECTION: both FALLING = PASS LONG, both RISING = PASS SHORT)
   10Y Nominal:${na(macro.nominal)}% | Real Yield:${na(macro.realYield)}% ${macro.realYieldDir||""}${macro.realYield!==null?(macro.realYield>1.5?" (HIGH — bearish)":macro.realYield<0.5?" (LOW — bullish)":" (moderate)"):""} | DXY:${na(macro.dxy)} ${macro.dxyDir||""}
 
-COT — CFTC Managed Money  Net:${cot?.netMM?.toLocaleString()??"n/a"} | WeekΔ:${cot?.weekChange?.toLocaleString()??"n/a"} | ${na(cot?.sentiment)} (>200k crowded long=bearish, <50k crowded short=bullish)
+MACRO MOMENTUM ★ — FRED rate-of-change (scorecard row 5; THIS IS GOLD'S STRONGEST LEADING INPUT — weight it heavily)
+  DXY change over window: ${macro.dxyChg!=null?(macro.dxyChg>0?"+":"")+macro.dxyChg+(macro.dxyChgPct!=null?` (${macro.dxyChgPct>0?"+":""}${macro.dxyChgPct}%)`:""):"n/a"} | Real-yield change: ${macro.realYieldChg!=null?(macro.realYieldChg>0?"+":"")+macro.realYieldChg+"pp":"n/a"}
+  Combined: ${macro.momentum||"unavailable"}
+  RULE: both FALLING (negative changes) = PASS LONG with extra weight; both RISING = PASS SHORT with extra weight; mixed = NEUTRAL. Momentum matters more than the absolute level.
+
+COT — CONTEXT ONLY, NOT SCORED  Net:${cot?.netMM?.toLocaleString()??"n/a"} | WeekΔ:${cot?.weekChange?.toLocaleString()??"n/a"} | ${na(cot?.sentiment)}
+  (Weekly-lagged positioning. Empirically ~0.02 correlation with next-week gold direction over 57 weeks, so it is NOT a scored row — use it only as a crowding/risk note at true extremes (>200k net), never as a directional signal.)
 
 GOLD CONTEXT  Daily ATR:$${f2(td?.dailyAtr)} (${td?.dailyAtr>40?"HIGH vol — widen stops":td?.dailyAtr<20?"LOW vol — tight ranges":"normal"}) | Round numbers near price: ${td?.rounds?.length?td.rounds.map(r=>"$"+r).join(", "):"none within $30"}
-  PDH: $${f2(td?.pdh)} | PDL: $${f2(td?.pdl)} (previous-day high/low — universally watched liquidity levels)${td?.sweep?`
-  🎯 LIQUIDITY SWEEP DETECTED at $${f2(td.sweep.level)} (${td.sweep.side}) — price spiked through then closed back inside. Classic stop hunt: ${td.sweep.note}.`:td?.nearPD?`
-  ⚠ Price within $5 of ${td.nearPD.side} ($${f2(td.nearPD.level)}) — stop-hunt risk, London false spike likely. Wait for a confirmed break or rejection before committing.`:""}
+  PDH: $${f2(td?.pdh)} | PDL: $${f2(td?.pdl)} (previous-day high/low — reference levels only; the sweep/stop-hunt alert was removed after testing showed a 49% reversal rate at ~2.6 fires/day = noise)
   Session candle note: London open (08-09 UTC) often false-breaks then reverses — wait for the 2nd candle. NY open (13:30-14:30 UTC) is the most reliable candle of the day.
 
 ${postNfp?.active?`
@@ -333,10 +352,8 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(td?.pdl!=null) p.pdl=td.pdl.toFixed(2);
     if(td?.volRatio!=null) p._volRatio=td.volRatio;
     if(td?.nfpLarge) p._nfpLarge=true;
-    p._sweepNote = td?.sweep ? `🎯 LIQUIDITY SWEEP DETECTED at $${td.sweep.level.toFixed(2)} (${td.sweep.side}) — classic stop hunt. Reversal setup forming: ${td.sweep.note}.`
-      : td?.nearPD ? `⚠️ Price near ${td.nearPD.side} ($${td.nearPD.level.toFixed(2)}) — stop hunt risk. London false spike likely. Wait for confirmed break or rejection.` : null;
     p._sources=[...(ta?["Real OHLCV"]:[]),...((macro.dxy!=null||macro.realYield!=null)?["FRED"]:[]),...(cot?["COT"]:[])];
-    mergeTA(p, ta, v=>v.toFixed(2));
+    mergeTA(p, ta, v=>v.toFixed(2), GOLD.scRows.map(r=>r.key));
   },
 };
 
@@ -386,21 +403,24 @@ const GBP = {
     "⚠ Cable spikes on UK data (CPI/GDP/jobs, 06:00–07:00 UTC) even when USD is quiet — exit before them",
     "Pip value: at 0.01 lots, 1 pip ≈ $0.10 ≈ €0.09 (any USD-quoted pair) — CONFIRM your exact €/pip with Pepperstone for your account currency before sizing",
   ],
-  scTitle:"10-Step Scorecard", passesOf:10,
+  // 9-step (was 10): MACD+RSI merged into one momentum slot (0.63 correlated), and
+  // the 200MA directional bias REMOVED for this pair — measured regime edge was
+  // -25pp (above the 200MA was LESS bullish), so it was actively misleading on a
+  // range-prone major. Regime row now reads range-vs-trend instead of a bias.
+  scTitle:"9-Step Scorecard", passesOf:9,
   scRows:[
-    { key:"price",   label:"1. Price & Session" },
-    { key:"macd",    label:"2. MACD 1h/4h/Daily" },
-    { key:"rsi_ma",  label:"3. RSI 70/30 + 200MA" },
-    { key:"boe_fed", label:"4. BOE/Fed + DXY" },
-    { key:"uk_data", label:"5. UK/US Data" },
-    { key:"levels",  label:"6. Levels / Fib / Pivots" },
-    { key:"regime",  label:"7. Regime / Structure" },
-    { key:"news",    label:"8. News / Macro" },
+    { key:"price",    label:"1. Price & Session" },
+    { key:"momentum", label:"2. Momentum (MACD+RSI)" },
+    { key:"boe_fed",  label:"3. BOE/Fed + DXY" },
+    { key:"uk_data",  label:"4. UK/US Data" },
+    { key:"levels",   label:"5. Levels / Fib / Pivots" },
+    { key:"regime",   label:"6. Regime (range vs trend)" },
+    { key:"news",     label:"7. News / Macro" },
     ...TA_ROWS,
   ],
   readyLines:(k)=>[
     k.td?"✓ Twelve Data (GBP/USD forex — MACD/RSI/ATR/EMA/VWAP/pivots)":"⚠ No Twelve Data — AI inference only",
-    (k.fred?"✓ FRED (DXY + US 10Y + Fed funds)":"⚠ No FRED — web search fallback")+" · BOE/UK data via web search",
+    (k.fred?"✓ FRED (DXY + US 10Y + Fed funds + UK SONIA)":"⚠ No FRED — web search fallback")+" · BOE guidance via web search",
   ],
   levelsTitle:"Key Levels & EMAs",
   levels:(s)=>[
@@ -424,8 +444,8 @@ const GBP = {
         <p style={{...mono,fontSize:12,margin:0,color:"#e2e8f0"}}>{fmt(s.real_yield)}</p></div>
       </div>
       <div style={card}>
-        <p style={lbl}>BOE vs Fed differential</p>
-        <Stat title="Rate differential bias (search-based)" value={fmt(s.rate_diff)}/>
+        <p style={lbl}>BOE vs Fed differential <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· FRED SONIA (structured)</span></p>
+        <Stat title="UK − US policy rate (SONIA vs Fed Funds)" value={fmt(s.rate_diff)} sub={s.sonia?`UK SONIA ${s.sonia}`:"structured FRED data + search for forward guidance"}/>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
           <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>BOE</p><p style={{...mono,fontSize:12,margin:0,color:"#e2e8f0"}}>{fmt(s.boe_bias)}</p></div>
           <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Fed</p><p style={{...mono,fontSize:12,margin:0,color:"#e2e8f0"}}>{fmt(s.fed_bias)}</p></div>
@@ -439,7 +459,7 @@ const GBP = {
 ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, EMA, VWAP, pivots, 200MA, or DXY. These are calculated from real API data.
 
 YOUR JOB (web search only for these):
-1. BOE POLICY (cable's key domestic driver): search "BOE Bank of England interest rate decision" — latest Bank Rate, MPC vote split, and hawkish/dovish forward guidance. Compare to the Fed's stance to get the BOE-vs-Fed differential.
+1. BOE FORWARD GUIDANCE ONLY (the rate LEVEL and the UK−US differential are already provided structurally from FRED SONIA — do not search for them): search "BOE Bank of England interest rate decision" for the MPC vote split and hawkish/dovish forward guidance for the NEXT meeting. Combine that guidance with the structured differential given in the data package.
 2. UK DATA: search "UK GDP inflation data" — latest UK CPI, GDP and employment/wages vs expectations. Which side (UK or US) is printing stronger.
 3. NEWS: top GBP/USD news last 24h — UK politics/fiscal, risk sentiment, GBP-specific analyst commentary.
 4. KEY LEVELS: nearest institutional GBP/USD support/resistance; confirm/refine the provided pivots.
@@ -449,17 +469,17 @@ KEY CABLE LOGIC:
 - DXY (USD side) is a dominant filter — cable is USD-quoted, so DXY rising = SHORT GBP/USD, DXY falling = LONG. Never fight a strong DXY move.
 - BOE hawkish + Fed dovish = LONG cable. BOE dovish + Fed hawkish = SHORT. Both same direction = choppy, lean the stronger-surprise side.
 - UK data is a HEAVYWEIGHT, not an afterthought: cable often has outsized moves on UK CPI/GDP/jobs (released 06:00-07:00 UTC) even when the USD side is quiet. Weight UK-side surprises fully.
-- Price above 200 EMA = bullish bias; below = bearish.
+- NO 200-MA TREND BIAS on this pair. Measured over 2 years, price above the 200MA was LESS likely to rise (-25pp edge) — cable ranges more than it trends. Read regime as RANGE vs TREND (via ADX/structure), never as "above the MA = bullish".
+- MACD and RSI are ~0.63 correlated and share ONE momentum row — never count them as two independent confirmations.
 
 10-STEP SCORECARD RULES (calibrated for GBP/USD's real volatility):
 1. PRICE & SESSION: above VWAP & upper third of range in a London/overlap session = PASS LONG; below & lower third = PASS SHORT; mid/off-session = NEUTRAL.
-2. MACD MULTI-TF: 1h+4h+Daily all above signal = PASS LONG; all below = PASS SHORT; 2/3 = NEUTRAL; else FAIL.
-3. RSI + 200MA (STANDARD 70/30 — cable's RSI rarely exceeds 70 even on 1h, so 70/30 ARE the real extremes; do NOT use gold's 80/20): RSI 50-70 + above 200MA = PASS LONG; RSI 30-50 + below 200MA = PASS SHORT; >70/<30 = NEUTRAL for entry.
-4. BOE/FED + DXY: DXY falling + BOE-relatively-hawkish = PASS LONG; DXY rising + BOE-relatively-dovish = PASS SHORT; conflict = NEUTRAL. DXY direction is provided; use search for the BOE/Fed lean.
-5. UK/US DATA: UK data beats expectations vs US = PASS LONG; US beats UK = PASS SHORT; nothing notable = NEUTRAL. Treat a UK CPI/GDP/jobs surprise as fully as a US one.
-6. LEVELS/PIVOTS: within 0.1% of pivot/structural support (LONG) or resistance (SHORT) = PASS; mid-range = FAIL.
-7. REGIME/STRUCTURE: the pre-computed 4h structure + ADX (calibrated bars for cable) agree with the trade = PASS; ranging/conflicting = NEUTRAL/FAIL.
-8. NEWS/MACRO: GBP-supportive catalyst / risk-on = PASS; GBP-negative / risk-off = FAIL; unclear = NEUTRAL.
+2. MOMENTUM (MACD + RSI — ONE combined slot; they are ~0.63 correlated so they are scored together, NOT as two confirmations): PASS LONG when the 1h/4h/Daily MACD lean is bullish AND RSI is 50-70. PASS SHORT when MACD lean bearish AND RSI 30-50. Mixed = NEUTRAL. RSI >70/<30 = NEUTRAL for entry (cable's real extremes — never gold's 80/20). Do NOT use the 200MA in this row.
+3. BOE/FED + DXY: use the STRUCTURED UK−US differential (FRED SONIA vs Fed Funds) provided in the package, plus DXY direction. DXY falling + UK rate relatively supportive/hawkish guidance = PASS LONG; DXY rising + UK relatively dovish = PASS SHORT; conflict = NEUTRAL.
+4. UK/US DATA: UK data beats expectations vs US = PASS LONG; US beats UK = PASS SHORT; nothing notable = NEUTRAL. Treat a UK CPI/GDP/jobs surprise as fully as a US one.
+5. LEVELS/PIVOTS: within 0.1% of pivot/structural support (LONG) or resistance (SHORT) = PASS; mid-range = FAIL.
+6. REGIME (RANGE vs TREND — no directional MA bias): use ADX (cable-calibrated bars) + 4h structure. In a TREND regime, a trade WITH the structure = PASS. In a RANGE regime, a mean-reversion trade from the range edge = PASS and a breakout trade = FAIL/NEUTRAL. Never score this from the 200MA.
+7. NEWS/MACRO: GBP-supportive catalyst / risk-on = PASS; GBP-negative / risk-off = FAIL; unclear = NEUTRAL.
 
 SIGNAL RULES (calibrated — do NOT over-output WAIT; cable is a normal-trending major):
 - Binary event (BOE/FOMC/UK CPI/UK GDP/UK jobs/US CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
@@ -472,7 +492,7 @@ SIGNAL RULES (calibrated — do NOT over-output WAIT; cable is a normal-trending
 - Off-peak (Asian) + no catalyst → cap confidence at MEDIUM.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"1.XXXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXXX","entry_note":"brief","stop":"1.XXXXX","stop_note":"1.5x 4h ATR","stop_pct":"35 pips","t1":"1.XXXXX","t2":"1.XXXXX","rr":"1:2","high_24h":"1.XXXXX","low_24h":"1.XXXXX","vwap":"1.XXXXX","ema50":"1.XXXXX","ema200":"1.XXXXX","support":"1.XXXXX","resistance":"1.XXXXX","ma200":"1.XXXXX","dxy":"XXX.XX — falling","real_yield":"US 10Y X.XX%","rate_diff":"BOE vs Fed lean","boe_bias":"hawkish hold","fed_bias":"dovish","uk_data_note":"UK CPI/GDP surprise or empty","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_ma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"boe_fed":{"r":"PASS|FAIL|NEUTRAL","note":"DXY dir + BOE/Fed"},"uk_data":{"r":"PASS|FAIL|NEUTRAL","note":"which side stronger"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"regime":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"72/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 1.XXXXX — close 50% move stop to entry","T2 1.XXXXX — close rest","Stop 1.XXXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
+{"action":"LONG|SHORT|WAIT","price":"1.XXXXX","confidence":"HIGH|MEDIUM|LOW","entry":"1.XXXXX","entry_note":"brief","stop":"1.XXXXX","stop_note":"1.5x 4h ATR","stop_pct":"35 pips","t1":"1.XXXXX","t2":"1.XXXXX","rr":"1:2","high_24h":"1.XXXXX","low_24h":"1.XXXXX","vwap":"1.XXXXX","ema50":"1.XXXXX","ema200":"1.XXXXX","support":"1.XXXXX","resistance":"1.XXXXX","ma200":"1.XXXXX","dxy":"XXX.XX — falling","real_yield":"US 10Y X.XX%","rate_diff":"BOE vs Fed lean","boe_bias":"hawkish hold","fed_bias":"dovish","uk_data_note":"UK CPI/GDP surprise or empty","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"momentum":{"r":"PASS|FAIL|NEUTRAL","note":"MACD+RSI combined"},"boe_fed":{"r":"PASS|FAIL|NEUTRAL","note":"UK-US differential + DXY"},"uk_data":{"r":"PASS|FAIL|NEUTRAL","note":"which side stronger"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"regime":{"r":"PASS|FAIL|NEUTRAL","note":"range vs trend"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"72/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 1.XXXXX — close 50% move stop to entry","T2 1.XXXXX — close rest","Stop 1.XXXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
   pipeline: async ({ keys, addLog }) => {
     const tdCandles = async (interval, outputsize=100) => {
@@ -481,7 +501,10 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
-    const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=6`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null; return { v, prev, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown" }; };
+    // Latest value + direction vs prior + MOMENTUM (change across the whole window).
+    // The audit showed DXY/real-yield are gold's strongest leading inputs, so their
+    // rate-of-change is scored, not just their level.
+    const fred = async s => { const r=await fetch(proxyDataUrl("fred", `https://api.stlouisfed.org/fred/series/observations?series_id=${s}&api_key=${keys.fred}&file_type=json&sort_order=desc&limit=8`)); const d=await r.json(); const vals=(d.observations||[]).filter(o=>o.value!==".").map(o=>parseFloat(o.value)); const v=vals[0]??null, prev=vals[1]??null, older=vals.length?vals[vals.length-1]:null; return { v, prev, older, dir:(v!=null&&prev!=null)?(v>prev?"RISING":v<prev?"FALLING":"FLAT"):"unknown", chg:(v!=null&&older!=null)?v-older:null }; };
     const gf = v => (v||v===0) ? v.toFixed(5) : "n/a";
 
     addLog("Fetching GBP/USD spot...");
@@ -528,12 +551,20 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
 
-    let macro={dxy:null,dxyDir:"unknown",dgs10:null,fedfunds:null};
+    let macro={dxy:null,dxyDir:"unknown",dgs10:null,fedfunds:null,sonia:null,rateDiff:null};
     if(keys.fred){ try{
-      addLog("Fetching FRED DXY + US 10Y + Fed funds...");
-      const [dxy,dgs10,fedfunds]=await Promise.all([fred("DTWEXBGS"),fred("DGS10"),fred("FEDFUNDS")]);
+      // IUDSOIA = Daily Sterling Overnight Index Average (SONIA) — a STRUCTURED UK
+      // policy-rate proxy that tracks Bank Rate, so the BOE-vs-Fed differential is
+      // computed from real data instead of relying only on search commentary.
+      addLog("Fetching FRED DXY + US 10Y + Fed funds + UK SONIA...");
+      const [dxy,dgs10,fedfunds,sonia]=await Promise.all([fred("DTWEXBGS"),fred("DGS10"),fred("FEDFUNDS"),fred("IUDSOIA")]);
       macro.dxy=dxy.v; macro.dxyDir=dxy.dir; macro.dgs10=dgs10.v; macro.dgs10Dir=dgs10.dir; macro.fedfunds=fedfunds.v;
-      addLog(`FRED → DXY:${macro.dxy} (${macro.dxyDir}) 10Y:${macro.dgs10}% FedFunds:${macro.fedfunds}%`);
+      macro.sonia=sonia.v; macro.soniaDir=sonia.dir; macro.soniaChg=sonia.chg!=null?p2(sonia.chg):null;
+      if(macro.sonia!=null&&macro.fedfunds!=null){
+        macro.rateDiff=p2(macro.sonia-macro.fedfunds); // UK minus US policy rate
+        macro.rateDiffLbl=macro.rateDiff>0?"UK rate ABOVE US (GBP-supportive)":macro.rateDiff<0?"UK rate BELOW US (GBP-negative)":"parity";
+      }
+      addLog(`FRED → DXY:${macro.dxy} (${macro.dxyDir}) 10Y:${macro.dgs10}% Fed:${macro.fedfunds}% SONIA:${macro.sonia}% (${macro.soniaDir}) diff:${macro.rateDiff}pp`);
     }catch(e){ addLog(`FRED error: ${e.message}`); } }
 
     const session=getGbpSession();
@@ -558,14 +589,20 @@ MACD — THREE TIMEFRAMES
 
 RSI (14, CALIBRATED 70/30 for cable)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)} | Daily:${f1(td?.rsiD)}${rsiLbl(td?.rsiD)}
   (cable RSI rarely exceeds 70 even on 1h — 70/30 ARE the real extremes; do NOT apply gold's 80/20)
-  200MA: ${gf(td?.ma200)} → price ${td?.ma200?(spot.price>td.ma200?"ABOVE (bull bias)":"BELOW (bear bias)"):"unknown"}
+  MACD and RSI are scored TOGETHER as one momentum row (they are ~0.63 correlated — not two independent confirmations).
+  200MA: ${gf(td?.ma200)} — REFERENCE LEVEL ONLY. Do NOT derive a bullish/bearish bias from it for cable: the measured regime edge was -25pp (price above the 200MA was LESS likely to rise), so a 200MA trend-bias is misleading on this pair.
 
 VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h.ratio):"n/a"} | 4h:${td?.vol4h?td.vol4h.ratio.toFixed(2)+"x"+volLbl(td.vol4h.ratio):"n/a"}
 
 ATR & STOP  1h:${gf(td?.atr1h)} | 4h:${gf(td?.atr4h)} | Recommended stop: ${gf(stopAmt)} (${stopPips??"~35"} pips, 1.5x 4h ATR). Cable daily ATR ~${td?.dailyAtr?Math.round(td.dailyAtr*10000):"90-100"} pips.
 
 MACRO — FRED (USD side)  DXY (Fed TWI):${na(macro.dxy)} ${macro.dxyDir||""} | US 10Y:${na(macro.dgs10)}% | Fed Funds:${na(macro.fedfunds)}%
-  (DXY direction is computed locally vs the prior reading — scorecard rule 4 uses it: DXY FALLING = PASS LONG cable, RISING = PASS SHORT. DXY is a dominant filter. Use web search for the BOE Bank Rate + MPC guidance to complete the BOE-vs-Fed differential.)
+  (DXY direction is computed locally vs the prior reading — scorecard rule 3 uses it: DXY FALLING = PASS LONG cable, RISING = PASS SHORT. DXY is a dominant filter.)
+
+BOE/FED RATE DIFFERENTIAL — STRUCTURED (FRED, not search)
+  UK SONIA (Bank Rate proxy): ${na(macro.sonia)}% ${macro.soniaDir||""}${macro.soniaChg!=null?` (Δ${macro.soniaChg>0?"+":""}${macro.soniaChg}pp over window)`:""} | US Fed Funds: ${na(macro.fedfunds)}%
+  UK − US differential: ${macro.rateDiff!=null?`${macro.rateDiff>0?"+":""}${macro.rateDiff}pp — ${macro.rateDiffLbl}`:"unavailable"}
+  Use this STRUCTURED differential as the primary BOE-vs-Fed input. Web search is now only for FORWARD guidance (MPC vote split, next-meeting lean) — not for the rate level itself, which is given here.
 
 CABLE CONTEXT
   PDH: ${gf(td?.pdh)} | PDL: ${gf(td?.pdl)} (previous-day high/low — cable stop-hunts these at the London open)${td?.sweep?`
@@ -592,11 +629,14 @@ ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unava
     if(td?.pdl!=null)        p.pdl=td.pdl.toFixed(5);
     if(macro.dxy!==null&&(!p.dxy||p.dxy==="")) p.dxy=`${macro.dxy}${macro.dxyDir?` — ${macro.dxyDir.toLowerCase()}`:""}`;
     if(macro.dgs10!==null&&(!p.real_yield||p.real_yield==="")) p.real_yield=`US 10Y ${macro.dgs10}%`;
+    // Structured UK rate data (FRED SONIA) overrides any search-derived differential.
+    if(macro.sonia!=null) p.sonia=`${macro.sonia}%${macro.soniaDir?` (${macro.soniaDir.toLowerCase()})`:""}`;
+    if(macro.rateDiff!=null) p.rate_diff=`${macro.rateDiff>0?"+":""}${macro.rateDiff}pp — ${macro.rateDiffLbl||""}`;
     if(td?.volRatio!=null) p._volRatio=td.volRatio;
     p._sweepNote = td?.sweep ? `🎯 LIQUIDITY SWEEP at ${td.sweep.level.toFixed(5)} (${td.sweep.side}) — classic stop hunt. Reversal setup: ${td.sweep.note}.`
       : td?.nearPD ? `⚠️ Price near ${td.nearPD.side} (${td.nearPD.level.toFixed(5)}) — London stop-hunt risk. Wait for confirmed break or rejection.` : null;
     p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
-    mergeTA(p, ta, v=>v.toFixed(5));
+    mergeTA(p, ta, v=>v.toFixed(5), GBP.scRows.map(r=>r.key));
   },
 };
 
@@ -629,26 +669,28 @@ const BTC = {
   ], rec:"Tradeable but reduce size 30%. Manipulation risk is higher on weekends." },
   events:["FOMC","CPI","PCE"], eventsNote:"BTC is a risk asset — Fed policy & CPI move it. Never hold through these.",
   riskRules:[
-    "BTC is FAR more volatile than gold or EUR/USD — size down accordingly",
+    "BTC is FAR more volatile than gold or GBP/USD — size down accordingly",
     "Max 1-2% of account at risk per trade — STRICTLY","ATR-based stop mandatory: 1.5× 4h ATR (often $1,000–3,000)",
     "Minimum R:R 1:2.5 (higher than gold due to volatility)","Never hold through FOMC / CPI",
-    "2-loss rule: two consecutive losses → stop trading BTC for 24h","Funding >+0.1%/8h at resistance = contrarian SHORT setup",
+    "2-loss rule: two consecutive losses → stop trading BTC for 24h","Crowded-long funding at resistance = contrarian SHORT setup (threshold auto-calibrated to the current regime)",
   ],
-  scTitle:"10-Step Scorecard", passesOf:10,
+  // 9-step (was 10): 200-SMA regime (+2pp measured edge) and BTC dominance (no
+  // causal link to BTC's own price — it's an alt-rotation metric) demoted to
+  // context-only display. The freed weight goes to the funding/OI/ETF trio.
+  scTitle:"9-Step Scorecard", passesOf:9,
   scRows:[
     { key:"price",      label:"1. Price & 24h range" },
     { key:"macd",       label:"2. MACD 1h/4h" },
-    { key:"rsi_sma",    label:"3. RSI + 200 SMA" },
-    { key:"funding_oi", label:"4. Funding + OI" },
+    { key:"rsi",        label:"3. RSI 70/30" },
+    { key:"funding_oi", label:"4. Funding + OI ★" },
     { key:"etf",        label:"5. ETF flows ★" },
-    { key:"dominance",  label:"6. BTC dominance" },
-    { key:"levels",     label:"7. Levels (round #s)" },
-    { key:"news",       label:"8. News + Fear/Greed" },
+    { key:"levels",     label:"6. Levels (round #s)" },
+    { key:"news",       label:"7. News + Fear/Greed" },
     ...TA_ROWS,
   ],
   readyLines:()=>[
-    "✓ Binance (price, OHLCV, funding, open interest) — free",
-    "✓ CoinGecko dominance · alternative.me Fear & Greed · Web search (ETF flows + news)",
+    "✓ Binance (price, OHLCV, funding + history, open interest) — free",
+    "✓ CoinGecko dominance (context) · alternative.me Fear & Greed · Web search (ETF flows + news)",
   ],
   levelsTitle:"Key Levels",
   levels:(s)=>[
@@ -666,18 +708,18 @@ const BTC = {
     <>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
       <div style={card}>
-        <p style={lbl}>Derivatives — Binance</p>
-        <Stat title="Funding rate (per 8h)" value={fmt(s.funding_rate)} sub=">+0.1% = crowded longs (bearish) · <-0.05% = crowded shorts (bullish)"
-          color={(()=>{const v=parseFloat(s.funding_rate);return v>0.1?"#f87171":v<-0.05?"#4ade80":"#e2e8f0";})()}/>
+        <p style={lbl}>Derivatives — Binance <span style={{color:"#475569",fontSize:9,fontWeight:400}}>· ★ scored</span></p>
+        <Stat title="Funding rate (per 8h)" value={fmt(s.funding_rate)} sub={s.funding_bars?`crowded bars ${s.funding_bars} (auto-calibrated to current regime)`:"crowded bars auto-calibrated to the current regime"}
+          color={(()=>{const v=parseFloat(s.funding_rate);const hi=parseFloat(s.funding_hi),lo=parseFloat(s.funding_lo);return (isFinite(hi)&&v>hi)?"#f87171":(isFinite(lo)&&v<lo)?"#4ade80":"#e2e8f0";})()}/>
         <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Open interest {s.oi_trend&&<span style={{color:s.oi_trend==="Rising"?"#4ade80":s.oi_trend==="Falling"?"#f87171":"#94a3b8"}}>· {s.oi_trend}</span>}</p>
         <p style={{...mono,fontSize:13,margin:0,color:"#e2e8f0"}}>{fmt(s.open_interest)}</p></div>
       </div>
       <div style={card}>
         <p style={lbl}>Market structure</p>
-        <Stat title="BTC dominance" value={fmt(s.btc_dominance)} sub="rising = money into BTC (bullish)"/>
-        <Stat title="ETF daily flow ★" value={fmt(s.etf_flow)} sub="inflows = institutional buying"/>
+        <Stat title="ETF daily flow ★" value={fmt(s.etf_flow)} sub="inflows = institutional buying (scored)"/>
+        <Stat title="BTC dominance" value={fmt(s.btc_dominance)} sub="CONTEXT ONLY (not scored) — alt-rotation metric, no clear link to BTC's own price"/>
         <div><p style={{fontSize:10,color:"#475569",margin:"0 0 2px"}}>Fear & Greed</p>
-        <p style={{...mono,fontSize:12,margin:0,color:(()=>{const v=parseInt(s.fear_greed);return v<20?"#4ade80":v>80?"#f87171":"#94a3b8";})()}}>{fmt(s.fear_greed)} {(()=>{const v=parseInt(s.fear_greed);return v<20?"(Extreme Fear → contrarian LONG)":v>80?"(Extreme Greed → contrarian SHORT)":"";})()}</p></div>
+        <p style={{...mono,fontSize:12,margin:0,color:(()=>{const v=parseInt(s.fear_greed);return v<20?"#4ade80":"#94a3b8";})()}}>{fmt(s.fear_greed)} {(()=>{const v=parseInt(s.fear_greed);return v<20?"(Extreme Fear → contrarian LONG)":v>80?"(Extreme Greed → elevated only, not a short)":"";})()}</p></div>
       </div>
     </div>
     {/* ON-CHAIN CONTEXT (Section 2) — supplementary, feeds AI reasoning */}
@@ -705,22 +747,22 @@ YOUR JOB (web search only):
 5. BIAS SYNTHESIS: All pre-computed data + research → highest-probability direction.
 
 KEY BTC LOGIC:
-- Funding rate (critical): >+0.1%/8h = overleveraged longs = contrarian SHORT. <-0.05%/8h = crowded shorts = contrarian LONG. Neutral otherwise.
+- Funding rate (critical): use the AUTO-CALIBRATED crowded bars given in the DERIVATIVES block (they adapt to the current regime). Above the crowded-long bar = overleveraged longs = contrarian SHORT lean. Below the crowded-short bar = crowded shorts = contrarian LONG lean. Do NOT use legacy fixed bars (0.1% / -0.05%) — real funding never reaches them.
 - ETF flows are the leading institutional indicator: strong inflows = BULLISH, outflows = BEARISH.
-- BTC dominance rising = money into BTC = BULLISH BTC; falling = rotation to alts = neutral/bearish.
-- Fear & Greed: Extreme Fear (<20) = contrarian LONG; Extreme Greed (>80) = contrarian SHORT.
+- Fear & Greed is ASYMMETRIC: Extreme Fear (<20) = contrarian LONG (real measured edge). Extreme Greed (>80) is NOT a contrarian short — it is only elevated sentiment; never short on greed alone.
 - Risk-on (Nasdaq up, VIX down) = BULLISH; risk-off = BEARISH.
-- Price above 200 SMA = bull regime; below = bear regime.
+- Funding / OI / ETF flows are the highest-weight BTC-specific inputs — weight them above the price-derived rows.
+- CONTEXT ONLY (never a scored row, never a directional reason): the 200 SMA regime (+2pp measured edge) and BTC dominance (an alt-rotation metric with no clear causal link to BTC's own price).
 
-8-STEP SCORECARD:
+7-STEP SCORECARD (+2 TA rows = 9 scored items):
 1. PRICE & RANGE: upper third of 24h range + momentum = PASS LONG; lower third = PASS SHORT; mid = NEUTRAL.
-2. MACD 1h/4h: both above signal = PASS LONG; both below = PASS SHORT; split = NEUTRAL.
-3. RSI + 200 SMA: 50-70 + above SMA = PASS LONG; 30-50 + below SMA = PASS SHORT; >70/<30 = NEUTRAL.
-4. FUNDING + OI: contrarian funding aligned with trade + OI rising into the move = PASS; extreme funding against = FAIL.
-5. ETF FLOWS: inflows = PASS LONG; outflows = PASS SHORT; flat/unknown = NEUTRAL.
-6. DOMINANCE: rising dominance = PASS LONG; falling = NEUTRAL/FAIL.
-7. LEVELS: near round-number support ($90k/$95k/$100k) for LONG or resistance for SHORT = PASS; mid-range = FAIL.
-8. NEWS + F&G: bullish catalyst / extreme fear = PASS; bearish / extreme greed against = FAIL; unclear = NEUTRAL.
+2. MACD 1h/4h: both above signal = PASS LONG; both below = PASS SHORT; split = NEUTRAL. (Lagging confirmer — do not treat as leading.)
+3. RSI (70/30, no 200SMA): 50-70 = PASS LONG; 30-50 = PASS SHORT; >70/<30 = NEUTRAL for entry. The 200 SMA is context only now — do NOT require it for this row.
+4. FUNDING + OI ★: contrarian funding (vs the AUTO-CALIBRATED bars) aligned with the trade + OI rising into the move = PASS; extreme funding against = FAIL. Highest-weight row.
+5. ETF FLOWS ★: inflows = PASS LONG; outflows = PASS SHORT; flat/unknown = NEUTRAL. Highest-weight row.
+6. LEVELS: near round-number support ($90k/$95k/$100k) for LONG or resistance for SHORT = PASS; mid-range = FAIL.
+7. NEWS + F&G: bullish catalyst = PASS; bearish = FAIL; unclear = NEUTRAL. Extreme FEAR (<20) counts as a PASS toward LONG. Extreme GREED does NOT count as a PASS toward SHORT (no measured edge).
+(Dominance and the 200 SMA are NOT scored — context only. Do not create "dominance" or "rsi_sma" scorecard entries.)
 
 SIGNAL RULES:
 - Binary event (FOMC/CPI/PCE) UPCOMING within the next 24h → WAIT (never hold BTC through macro). Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
@@ -728,13 +770,13 @@ SIGNAL RULES:
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
 - SIGNAL QUALITY: <35 = WAIT; 35-50 = LOW confidence (trade at own risk, minimum size); 50-70 = MEDIUM; 70-85 = HIGH; 85+ = VERY HIGH..
-- Funding >+0.1% + price at resistance = high-probability SHORT.
+- Funding above the auto-calibrated crowded-long bar + price at resistance = high-probability SHORT.
 - Stop: use the ATR-based value provided (do not widen). T1 min 1.5× ATR, T2 min 2.5× ATR.
 - Minimum R:R 1:2.5 for BTC. R:R <1:2.5 → WAIT.
 - Weekend/low-volume + no catalyst → cap confidence at MEDIUM.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
-{"action":"LONG|SHORT|WAIT","price":"XXXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXXX.XX","entry_note":"brief","stop":"XXXXX.XX","stop_note":"1.5x ATR","stop_pct":"2.1","t1":"XXXXX.XX","t2":"XXXXX.XX","rr":"1:2.5","high_24h":"XXXXX.XX","low_24h":"XXXXX.XX","support":"XXXXX.XX","resistance":"XXXXX.XX","sma200":"XXXXX.XX","funding_rate":"0.010%","open_interest":"XXXXX BTC","btc_dominance":"55.8%","fear_greed":"15 Extreme Fear","etf_flow":"+$250M IBIT","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi_sma":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"funding_oi":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"etf":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"dominance":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXXX — close 50% move stop to entry","T2 $XXXXX — close rest","Stop $XXXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
+{"action":"LONG|SHORT|WAIT","price":"XXXXX.XX","confidence":"HIGH|MEDIUM|LOW","entry":"XXXXX.XX","entry_note":"brief","stop":"XXXXX.XX","stop_note":"1.5x ATR","stop_pct":"2.1","t1":"XXXXX.XX","t2":"XXXXX.XX","rr":"1:2.5","high_24h":"XXXXX.XX","low_24h":"XXXXX.XX","support":"XXXXX.XX","resistance":"XXXXX.XX","sma200":"XXXXX.XX","funding_rate":"0.010%","open_interest":"XXXXX BTC","btc_dominance":"55.8%","fear_greed":"15 Extreme Fear","etf_flow":"+$250M IBIT","passes":5,"scorecard":{"price":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"macd":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"rsi":{"r":"PASS|FAIL|NEUTRAL","note":"RSI 70/30 only"},"funding_oi":{"r":"PASS|FAIL|NEUTRAL","note":"vs calibrated bars"},"etf":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"levels":{"r":"PASS|FAIL|NEUTRAL","note":"brief"},"news":{"r":"BULLISH|BEARISH|NEUTRAL","note":"brief"},"candles":{"r":"PASS|FAIL|NEUTRAL","note":"pattern name + tf"},"mtf":{"r":"PASS|FAIL|NEUTRAL","note":"4h/1h/15m agree?"}},"signal_quality":"78/100 — STRONG","entry_type":"Pattern|Optimal|Aggressive|Conservative","reasoning":"2 sentences","exits":["T1 $XXXXX — close 50% move stop to entry","T2 $XXXXX — close rest","Stop $XXXXX — full exit","Time — 4h max"],"news_hl":"headline","news_sent":"BULLISH|BEARISH|NEUTRAL","binary_event":"none or event+timing","data_note":"brief or empty","sources":["url1"],"wait_type":"binary_event|low_confidence|no_setup|wrong_session|none","triggers":{"watch_long":"price or n/a","watch_long_note":"why","watch_short":"price or n/a","watch_short_note":"why","invalidation":"price","invalidation_note":"what the break means","next_session":"HH:MM UTC","next_session_note":"session + why","news_time":"HH:MM UTC or none","news_event":"name or none","candle_close":"HH:MM UTC","candle_close_note":"1h/4h + why","mtf_fix":"what must change","pattern_needed":"pattern + level","indicator_needed":"indicator condition","primary_reason":"main reason","secondary_reason":"second or none","estimated_clarity":"when clearer","refresh_recommendation":"specific actionable line"}}`,
 
   pipeline: async ({ keys, addLog }) => {
     const klines = async (interval, limit=100) => {
@@ -752,7 +794,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       jget("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"),
       klines("15m",100).catch(()=>null), klines("1h",100).catch(()=>null), klines("4h",100).catch(()=>null),
       klines("1d",220).catch(()=>null), klines("1w",2).catch(()=>null),
-      jget("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1"),
+      jget("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=200"),
       jget("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"),
       jget("https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=4h&limit=2"),
       jget("https://api.coingecko.com/api/v3/global"),
@@ -787,12 +829,27 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     else addLog("⚠ Binance candles unavailable — MTF/patterns/ATR skipped (Binance may be geo-restricted or rate-limited in your region). Price falls back to CoinGecko; TA scores NEUTRAL.");
 
     let funding=null, oi=null, oiTrend="—", dom=null, fng=null, fngLabel=null;
-    if(fundingR?.[0]?.fundingRate!=null) funding=parseFloat(fundingR[0].fundingRate)*100;
+    // ── FUNDING, ROLLING-PERCENTILE CALIBRATED ────────────────────────────────
+    // The old fixed bars (>+0.1% / <-0.05% per 8h) NEVER fired: measured funding
+    // maxes near +0.010%/8h in the current regime, so the signal was dead. We now
+    // derive crowded bars from the trailing ~200 funding prints (p85/p15) so they
+    // self-calibrate to whatever regime we're in. Fixed fallbacks (+0.01/-0.005)
+    // are used only if history is unavailable.
+    let fundHi=0.01, fundLo=-0.005, fundBarSrc="fallback (fixed)";
+    if(Array.isArray(fundingR)&&fundingR.length){
+      const hist=fundingR.map(x=>parseFloat(x.fundingRate)*100).filter(v=>isFinite(v));
+      funding=hist[hist.length-1]??null; // newest print is last
+      if(hist.length>=30){
+        const s=[...hist].sort((a,b)=>a-b);
+        fundHi=s[Math.floor(0.85*(s.length-1))]; fundLo=s[Math.floor(0.15*(s.length-1))];
+        fundBarSrc=`rolling p85/p15 of ${hist.length} prints`;
+      }
+    } else if(fundingR?.[0]?.fundingRate!=null) funding=parseFloat(fundingR[0].fundingRate)*100;
     if(oiR?.openInterest) oi=parseFloat(oiR.openInterest);
     if(Array.isArray(oiHistR)&&oiHistR.length>=2){ const a=parseFloat(oiHistR[oiHistR.length-1].sumOpenInterest), b=parseFloat(oiHistR[oiHistR.length-2].sumOpenInterest); if(a&&b) oiTrend=a>b*1.005?"Rising":a<b*0.995?"Falling":"Flat"; }
     if(domR?.data?.market_cap_percentage?.btc!=null) dom=domR.data.market_cap_percentage.btc;
     if(fngR?.data?.[0]?.value){ fng=parseInt(fngR.data[0].value); fngLabel=fngR.data[0].value_classification; }
-    addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"}(${oiTrend}) Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
+    addLog(`Funding:${funding!=null?funding.toFixed(4)+"%":"n/a"} (crowded bars ${fundHi.toFixed(4)}/${fundLo.toFixed(4)} — ${fundBarSrc}) OI:${oi!=null?Math.round(oi).toLocaleString():"n/a"}(${oiTrend}) Dom:${dom!=null?dom.toFixed(1)+"%":"n/a"} F&G:${fng!=null?fng+" "+fngLabel:"n/a"}`);
 
     // ── ON-CHAIN CONTEXT: blockchain.info trends + whale flag + mempool.space ──
     const bcLatest = r => { const v=r?.values; if(!Array.isArray(v)||!v.length) return null; const last=v[v.length-1]?.y, first=v[0]?.y; const dir=(last!=null&&first!=null)?(last>first*1.02?"RISING":last<first*0.98?"FALLING":"FLAT"):"unknown"; return { val:last, dir }; };
@@ -826,8 +883,11 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
     const atr=td?.atr4h??null;
     const stopAmt=atr?p2(atr*1.5):null, stopPct=stopAmt?p2((stopAmt/spot.price)*100):null;
 
-    const fundLbl = funding!=null?(funding>0.1?" (CROWDED LONGS — contrarian bearish)":funding<-0.05?" (CROWDED SHORTS — contrarian bullish)":" (neutral)"):"";
-    const fngTxt  = fng!=null?(fng<20?" (Extreme Fear — contrarian LONG)":fng>80?" (Extreme Greed — contrarian SHORT)":""):"";
+    const fundLbl = funding!=null?(funding>fundHi?" (CROWDED LONGS — contrarian bearish)":funding<fundLo?" (CROWDED SHORTS — contrarian bullish)":" (neutral)"):"";
+    // F&G is ASYMMETRIC in the data: extreme fear (<20) preceded a bounce 62% of the
+    // time (n=114), but extreme greed (>80) was a 51% coinflip — so greed is NOT
+    // treated as a contrarian short, only noted as elevated sentiment.
+    const fngTxt  = fng!=null?(fng<20?" (Extreme Fear — contrarian LONG, measured edge)":fng>80?" (Extreme Greed — elevated sentiment ONLY; NOT a contrarian short)":""):"";
 
     const pkg=`=== PRE-COMPUTED MARKET DATA — DO NOT RE-FETCH ===
 
@@ -838,14 +898,21 @@ PRICE
 
 MACD  1h: line=${f1(td?.macd1h?.macd)} ${td?.macd1h?.aboveSignal?"ABOVE":"BELOW"} signal | 4h: line=${f1(td?.macd4h?.macd)} ${td?.macd4h?.aboveSignal?"ABOVE":"BELOW"} signal ${td?.macd4h?.expanding?"(expanding)":"(contracting)"}
 
-RSI (14)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)}
-  200 SMA (daily): $${f2(td?.sma200)} → price ${td?.sma200?(spot.price>td.sma200?"ABOVE (bull regime)":"BELOW (bear regime)"):"unknown"}
+RSI (14, standard 70/30 — verified: BTC reverses at >70)  1h:${f1(td?.rsi1h)}${rsiLbl(td?.rsi1h)} | 4h:${f1(td?.rsi4h)}${rsiLbl(td?.rsi4h)}
 
 VOLUME (vs 20-avg)  1h:${td?.vol1h?td.vol1h.ratio.toFixed(2)+"x"+volLbl(td.vol1h.ratio):"n/a"} | 4h:${td?.vol4h?td.vol4h.ratio.toFixed(2)+"x"+volLbl(td.vol4h.ratio):"n/a"}
 
-DERIVATIVES  Funding (8h): ${funding!=null?funding.toFixed(4)+"%":"n/a"}${fundLbl} | Open Interest: ${oi!=null?Math.round(oi).toLocaleString()+" BTC":"n/a"} (trend: ${oiTrend} over last 4h${oiTrend==="Rising"?" — new positions, strong move":oiTrend==="Falling"?" — positions closing, possible liquidations":""})
+DERIVATIVES ★ (highest-weight BTC-specific block — funding/OI/ETF)
+  Funding (8h): ${funding!=null?funding.toFixed(4)+"%":"n/a"}${fundLbl}
+  Crowded bars are AUTO-CALIBRATED to the current regime: crowded-long >${fundHi.toFixed(4)}%, crowded-short <${fundLo.toFixed(4)}% (${fundBarSrc}). Use THESE bars — legacy fixed bars like 0.1%/-0.05% are far outside today's real funding range and would never trigger.
+  Open Interest: ${oi!=null?Math.round(oi).toLocaleString()+" BTC":"n/a"} (trend: ${oiTrend} over last 4h${oiTrend==="Rising"?" — new positions, strong move":oiTrend==="Falling"?" — positions closing, possible liquidations":""})
 
-MARKET STRUCTURE  BTC Dominance: ${dom!=null?dom.toFixed(1)+"%":"n/a"} | Fear & Greed: ${fng!=null?fng+" "+fngLabel:"n/a"}${fngTxt}
+SENTIMENT  Fear & Greed: ${fng!=null?fng+" "+fngLabel:"n/a"}${fngTxt}
+  ASYMMETRY RULE (measured): extreme FEAR <20 is a genuine contrarian LONG (62% up-rate over the next 3 days, n=114). Extreme GREED >80 is NOT a contrarian short (51% = coinflip) — never output a SHORT because greed is high.
+
+CONTEXT ONLY — NOT SCORED (do not create scorecard entries for these)
+  200 SMA (daily): $${f2(td?.sma200)} → price ${td?.sma200?(spot.price>td.sma200?"above":"below"):"unknown"} (measured regime edge only +2pp for BTC — treat as background, not a directional reason)
+  BTC Dominance: ${dom!=null?dom.toFixed(1)+"%":"n/a"} (an alt-rotation metric; no clear causal link to BTC's own price — background only)
 
 ATR & STOP (4h)  ATR:$${f2(td?.atr4h)} | Recommended stop: $${na(stopAmt)} (${na(stopPct)}%, 1.5x ATR) — BTC stops are large, size position accordingly
 
@@ -864,10 +931,12 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
 === YOUR JOB: search BTC spot ETF daily flows (IBIT/FBTC — MOST IMPORTANT), whale/on-chain, regulatory news, Nasdaq/VIX risk tone, key round-number S/R, binary events → output JSON ===`;
 
     return { pkg, price:spot.price, src:spot.src, session,
-      meta:{ td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta, onchain } };
+      meta:{ td, h24, l24, funding, fundHi, fundLo, oi, oiTrend, dom, fng, fngLabel, ta, onchain } };
   },
   merge:(p,m)=>{
-    const { td, h24, l24, funding, oi, oiTrend, dom, fng, fngLabel, ta, onchain } = m;
+    const { td, h24, l24, funding, fundHi, fundLo, oi, oiTrend, dom, fng, fngLabel, ta, onchain } = m;
+    // Calibrated funding bars surfaced for the UI colour/threshold display.
+    if(fundHi!=null){ p.funding_hi=String(fundHi); p.funding_lo=String(fundLo); p.funding_bars=`>${fundHi.toFixed(4)}% / <${fundLo.toFixed(4)}%`; }
     if(onchain){
       const oc=onchain;
       if(oc.miners?.val!=null) p.oc_miners=`$${Math.round(oc.miners.val).toLocaleString()} · ${oc.miners.dir?.toLowerCase()}`;
@@ -887,7 +956,7 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
     if(dom!=null)              p.btc_dominance=`${dom.toFixed(1)}%`;
     if(fng!=null&&(!p.fear_greed||p.fear_greed==="")) p.fear_greed=`${fng} ${fngLabel||""}`.trim();
     p._sources=[...(ta?["Binance OHLCV"]:[]),...(dom!=null?["CoinGecko"]:[]),...(funding!=null?["Funding/OI"]:[])];
-    mergeTA(p, ta, v=>v.toFixed(2));
+    mergeTA(p, ta, v=>v.toFixed(2), BTC.scRows.map(r=>r.key));
   },
 };
 
