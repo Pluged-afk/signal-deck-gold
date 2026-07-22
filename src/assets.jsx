@@ -778,7 +778,7 @@ SIGNAL RULES:
 - Funding above the auto-calibrated crowded-long bar + price at resistance = high-probability SHORT.
 - Stop: use the ATR-based value provided (do not widen) — this defines 1R.
 - TARGETS: T1/T2 are NOT fixed — they SCALE with the higher-timeframe confirmation rung, and the exact values for this signal are in the TARGET DISTANCE line of the multi-timeframe block below. Use those. They are calibrated so every signal lands near a ~60% T1 hit rate. Do not substitute your own multiple, and do not stretch T1 to chase a rounder R:R.
-- Minimum R:R 1:2.5 for BTC. R:R <1:2.5 → WAIT.
+- Minimum R:R measured at T2 is 1:2, which the tier-scaled T2 delivers at tiers 1-3. Do NOT force WAIT for failing to reach 1:2.5 — the targets are calibrated for hit rate, not for a round R:R, and stretching T2 to 2.5R drops the BTC hit rate from ~39% to below 30%.
 - Weekend/low-volume + no catalyst → cap confidence at MEDIUM.
 
 Respond ONLY with valid JSON, no markdown, no text outside it:
