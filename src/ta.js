@@ -474,7 +474,13 @@ export const signalQuality = (parsed, ta, scoredKeys) => {
   if (ta.divergence && ta.divergence.type !== "none") bonus += 5; // momentum divergence confirmation
   const score = Math.min(100, pts + bonus);
   const label = score < 35 ? "WAIT" : score < 50 ? "LOW" : score < 70 ? "MEDIUM" : score < 85 ? "HIGH" : "VERY HIGH";
-  return { score, label };
+  // Split reported separately: `pts` is EVIDENCE (scorecard rows the model actually
+  // confirmed from news/macro/price) and `bonus` is STRUCTURE (locally-computed
+  // alignment). Bonuses can reach 45 of 100, so a structurally tidy set-up with
+  // almost no confirming evidence can still score in the MEDIUM band — which reads
+  // as more confident than it is. Surfacing the split stops the number flattering
+  // thin set-ups. (evidence + structure may exceed `score`, which is capped at 100.)
+  return { score, label, evidence: pts, structure: bonus };
 };
 
 // ─── Local WAIT when 4h/1h conflict — synthesised without an AI call (saves $) ─

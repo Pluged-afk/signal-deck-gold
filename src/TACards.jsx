@@ -36,9 +36,22 @@ export default function TACards({ sig, T, pricePrefix = "", decimals = 2, waitBa
             <p style={{ ...lbl, margin: 0 }}>Signal Quality</p>
             <span style={{ ...mono, fontSize: 14, fontWeight: 700, color: qCol(q.label) }}>{q.score}/100 · {q.label}</span>
           </div>
-          <div style={{ height: 8, background: "#020617", borderRadius: 6, overflow: "hidden" }}>
-            <div style={{ width: `${q.score}%`, height: "100%", background: qCol(q.label), transition: "width 0.4s" }} />
+          {/* Split bar: EVIDENCE (scorecard rows actually confirmed) vs STRUCTURE
+              (local alignment bonuses, up to 45 of 100). A tidy-but-unconfirmed set-up
+              can sit in the MEDIUM band on structure alone, which reads as more
+              conviction than there is — so the two are drawn separately. */}
+          <div style={{ display: "flex", height: 8, background: "#020617", borderRadius: 6, overflow: "hidden" }}>
+            <div title={`Evidence: ${q.evidence ?? 0} pts from confirmed scorecard rows`} style={{ width: `${Math.min(100, q.evidence ?? 0)}%`, height: "100%", background: qCol(q.label), transition: "width 0.4s" }} />
+            <div title={`Structure: ${q.structure ?? 0} pts from local alignment bonuses`} style={{ width: `${Math.max(0, Math.min(100 - (q.evidence ?? 0), q.structure ?? 0))}%`, height: "100%", background: qCol(q.label), opacity: 0.38, transition: "width 0.4s" }} />
           </div>
+          {q.evidence !== undefined && (
+            <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: "5px 0 0" }}>
+              <span style={{ color: qCol(q.label) }}>▮</span> {q.evidence} evidence (confirmed rows)
+              <span style={{ color: "#475569" }}> · </span>
+              <span style={{ color: qCol(q.label), opacity: 0.5 }}>▮</span> {q.structure} structure (alignment)
+              {q.evidence <= 20 && q.structure >= 30 ? <span style={{ color: "#fb923c" }}> — mostly structure, thin confirmation</span> : null}
+            </p>
+          )}
           <p style={{ fontSize: 9, color: "#475569", margin: "6px 0 0" }}>scorecard PASSes ×10 + bonuses (pattern@level +15, MTF aligned +10, HTF ladder 3/3 +10 · 2/3 +5, high vol +5, strong ADX +5, divergence +5). &lt;{waitBar} = WAIT, &lt;50 = LOW confidence.</p>
         </div>
       )}

@@ -93,11 +93,17 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           if(!parsed.wait_type || parsed.wait_type === "none") parsed.wait_type = "no_setup";
           if(parsed.triggers && !parsed.triggers.primary_reason) parsed.triggers.primary_reason = `Signal quality ${parsed._quality.score}/100 (below ${waitBar})`;
         } else {
+          // Track WHICH rule produced the final confidence label, so the UI can say
+          // why instead of showing a bare LOW/MEDIUM/HIGH. `aiConf` is what the model
+          // itself returned before any deterministic cap was applied.
+          const aiConf = parsed.confidence;
+          const caps = [];
           if((parsed._quality && parsed._quality.score < 50) || ta?.mtfConflict || ta?.dailyConflict){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; }
-          if(ta?.mtfConflict){ parsed._mtfConflict = true; addLog(`4h/1h conflict (4h ${ta.t4} / 1h ${ta.t1}) — capping confidence at LOW`); }
+          if(parsed._quality && parsed._quality.score < 50) caps.push(`quality ${parsed._quality.score} below 50`);
+          if(ta?.mtfConflict){ parsed._mtfConflict = true; caps.push(`4h/1h conflict`); addLog(`4h/1h conflict (4h ${ta.t4} / 1h ${ta.t1}) — capping confidence at LOW`); }
           // Daily gate: 4h+1h agree but the daily opposes them — measured win rate
           // 18-26% vs 43-47% when the daily agrees. Same treatment as a 4h/1h conflict.
-          if(ta?.dailyConflict){ parsed._dailyConflict = true; addLog(`DAILY conflict (daily ${ta.tD} vs 4h/1h ${ta.t4}) — capping confidence at LOW`); }
+          if(ta?.dailyConflict){ parsed._dailyConflict = true; caps.push(`daily (${ta.tD}) opposes the 4h`); addLog(`DAILY conflict (daily ${ta.tD} vs 4h/1h ${ta.t4}) — capping confidence at LOW`); }
           // Higher-timeframe tier — anchored on the DAILY, which measurement showed
           // carries almost all the predictive power (the 1h carries none). Tier 0 =
           // the daily dissents, regardless of how many lower timeframes agree.
@@ -105,9 +111,15 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           // Skipped entirely when daily candles are unavailable (htfTier === null).
           if(ta?.htfTier != null){
             parsed._htfTier = ta.htfTier;
-            if(ta.htfTier === 0){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; addLog(`HTF tier 0 — daily (${ta.tD}) does not confirm 4h ${ta.t4} — capping confidence at LOW`); }
-            else if(ta.htfTier < 3 && parsed.confidence === "HIGH"){ parsed.confidence = "MEDIUM"; addLog(`HTF tier ${ta.htfTier}/3 (daily confirms, ${3 - ta.htfTier} of 1h/weekly do not) — capping confidence at MEDIUM`); }
+            if(ta.htfTier === 0){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; caps.push(`tier 0 — daily does not confirm`); addLog(`HTF tier 0 — daily (${ta.tD}) does not confirm 4h ${ta.t4} — capping confidence at LOW`); }
+            else if(ta.htfTier < 3 && parsed.confidence === "HIGH"){ parsed.confidence = "MEDIUM"; caps.push(`tier ${ta.htfTier}/3`); addLog(`HTF tier ${ta.htfTier}/3 (daily confirms, ${3 - ta.htfTier} of 1h/weekly do not) — capping confidence at MEDIUM`); }
           }
+          // If nothing here overrode the model, the label is its own judgement — say so
+          // rather than leaving the user to guess which rule fired.
+          parsed._confReason = caps.length ? caps.join(" · ")
+            : `model's own call${parsed.passes !== undefined ? ` (${parsed.passes}/${config.passesOf} scorecard rows confirmed)` : ""}`;
+          parsed._confFromModel = caps.length === 0;
+          if(caps.length) addLog(`Confidence ${aiConf} → ${parsed.confidence} (${caps.join(" · ")})`);
         }
       }
 
@@ -322,9 +334,18 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
                 {(sig._sources||[]).map(s=><span key={s} style={{...mono,fontSize:10,color:"#4ade80"}}>✓ {s}</span>)}
               </div>
             </div>
-            <div style={{textAlign:"right"}}>
+            <div style={{textAlign:"right",maxWidth:190}}>
               <p style={{fontSize:10,color:"#475569",margin:"0 0 2px",letterSpacing:"0.07em"}}>CONFIDENCE</p>
               <p style={{...mono,fontSize:16,margin:0,color:cCol(sig.confidence)}}>{sig.confidence}</p>
+              {/* Higher-timeframe tier — the strongest measured predictor in the engine,
+                  so it belongs beside the confidence label, not buried below the fold. */}
+              {sig._htfTier!=null&&(()=>{
+                const m={3:{t:"daily+weekly+1h",a:"53-57%",c:"#4ade80"},2:{t:"daily +1 other",a:"52-55%",c:"#a3e635"},
+                         1:{t:"daily only",a:"52-56%",c:"#fbbf24"},0:{t:"daily does NOT confirm",a:"38-45%",c:"#f87171"}}[sig._htfTier];
+                return <p title="Higher-timeframe tier and the directional accuracy it delivered historically across gold/GBP/BTC. Historical, not a forecast." style={{...mono,fontSize:10,margin:"3px 0 0",color:m.c,lineHeight:1.35}}>tier {sig._htfTier}/3 · {m.t}<br/><span style={{color:"#64748b"}}>~{m.a} historically</span></p>;
+              })()}
+              {/* Why this label — otherwise the user has to guess which rule fired */}
+              {sig._confReason&&<p style={{fontSize:9,color:"#475569",margin:"4px 0 0",lineHeight:1.35}}>{sig._confFromModel?"set by":"capped by"} {sig._confReason}</p>}
             </div>
           </div>
           {sig.binary_event&&sig.binary_event!=="none"&&sig.binary_event!==""&&(()=>{const uc=urgencyCol(events[0]?.days);return(
