@@ -337,7 +337,7 @@ export const flipCheck = (c4h, sr, atr4h) => {
 // ─── master aggregator ───────────────────────────────────────────────────────
 // Each c* = { opens, highs, lows, closes, volumes }. `cal` = per-asset calibrated
 // ADX bars ({weak,strong}); defaults to gold/BTC's 20/25 when omitted.
-export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, prevClose, cal, rangeFadeEnabled = false }) => {
+export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, prevClose, cal, rangeFadeEnabled = false, revFadeEnabled = false }) => {
   // c1h and c4h are required (master timeframes); c15 is optional (entry timing);
   // c1d is optional but strongly recommended — see dailyConflict below.
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
@@ -430,6 +430,34 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
     }
   }
 
+  // ── REVERSAL-FADE (BTC only; opt-in via revFadeEnabled) ──────────────────────
+  // Turns the "LOW + FULL REVERSAL" no-trade into a tradeable fade. Fires ONLY when:
+  //   1. the daily does NOT confirm the 4h (tD !== t4) — i.e. a LOW / tier-0 setup
+  //   2. the 4h is not flat
+  //   3. the 1h pullback has SEVERELY or FULLY reversed the swing that AGREES with
+  //      the 4h trend (state SEVERE/FULL REVERSAL, dir matching the trend side) —
+  //      i.e. the move in the trend direction has been reversed against the trade
+  // Then FADE the 4h trend (take the opposite side). Measured (non-overlapping):
+  // the trend trade here LOSES; the fade returns +0.25R at 63% win on BTC
+  // (p=0.001, both period halves +0.22R/+0.29R). Gold/GBP did NOT clear the bar, so
+  // this is BTC-only. Target 1.0R, stop 1.5xATR. Distinct from range-fade (≈20% overlap).
+  let revFade = null;
+  if (revFadeEnabled && pull && t4 !== "FLAT" && !dailyConfirms) {
+    const sev = pull.state === "SEVERE" || pull.state === "FULL REVERSAL";
+    const against = (t4 === "BULL" && pull.dir === "up") || (t4 === "BEAR" && pull.dir === "down");
+    if (sev && against) {
+      const d = t4 === "BULL" ? -1 : 1;                      // fade OPPOSITE the 4h trend
+      const risk = 1.5 * atr4h;
+      revFade = {
+        active: true, dir: d > 0 ? "LONG" : "SHORT", pullState: pull.state, pullPct: Math.round(pull.pct),
+        target: price + d * 1.0 * risk, stop: price - d * risk, targetR: 1.0,
+      };
+      regimeLabel = "REVERSAL";
+    } else if (regimeLabel == null) {
+      regimeLabel = "NORMAL";
+    }
+  }
+
   // trend-context (weighted inputs for the AI)
   const adxBars = cal ? { weak: cal.adxWeak, strong: cal.adxStrong } : { weak: 20, strong: 25 };
   const adxPrevR = calcADX(c4h.highs.slice(0, -3), c4h.lows.slice(0, -3), c4h.closes.slice(0, -3), 14);
@@ -476,7 +504,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
     mtf, entries, atr4h, bb,
     mtfConflict, allDisagree,
     strength, structure, divergence, sessionBias: sBias, prevDayBias: pdBias,
-    vmeter, flip, rangeFade, regimeLabel, _cal: adxBars,
+    vmeter, flip, rangeFade, revFade, regimeLabel, _cal: adxBars,
   };
 };
 
@@ -568,7 +596,12 @@ export const taPromptBlock = (ta, f) => {
   CATALYST CHECK FIRST — this bias is SUBORDINATE to every WAIT/news rule. If a binary event is within 24h, OR your news search finds a real directional catalyst (surprise data, central-bank headline, geopolitical shock), OR any WAIT rule already applies → OUTPUT WAIT (or follow the catalyst) and IGNORE this fade entirely. Only read on if the tape is genuinely quiet.
   Regime conditions are met: ADX ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} is below this pair's weak bar (ranging), the daily does NOT confirm the 4h, and price is ${ta.rangeFade.devATR}xATR above/below the 20-period mean (BB mid ${f(ta.rangeFade.bbMid)}).
   In THIS regime the tested edge REVERSES the usual rule: FADE toward the mean, do NOT follow the 4h ${ta.t4} trend. Continuation here is measured to LOSE (~-0.2R, 37% win). The fade returns +0.13R at 72-77% win (non-overlapping, p<0.05, gold & GBP). This is a small-win / occasional-full-loss profile.
-  → PREFERRED (only if no catalyst): action ${ta.rangeFade.dir} (a mean-reversion fade, AGAINST the 4h trend by design). Entry at price. Stop ${f(ta.rangeFade.stop)} (1.5xATR on the far side). T1 = ${f(ta.rangeFade.target)} (the BB mid — a ${ta.rangeFade.targetR}R SUB-1R target; do NOT widen it and do NOT set a T2 beyond the mean; the edge is in the small, reliable reversion). Confidence stays LOW (this is tier 0 and a small edge) — state clearly that this is a range-fade against the trend. If anything is ambiguous, WAIT.` : ""}
+  → PREFERRED (only if no catalyst): action ${ta.rangeFade.dir} (a mean-reversion fade, AGAINST the 4h trend by design). Entry at price. Stop ${f(ta.rangeFade.stop)} (1.5xATR on the far side). T1 = ${f(ta.rangeFade.target)} (the BB mid — a ${ta.rangeFade.targetR}R SUB-1R target; do NOT widen it and do NOT set a T2 beyond the mean; the edge is in the small, reliable reversion). Confidence stays LOW (this is tier 0 and a small edge) — state clearly that this is a range-fade against the trend. If anything is ambiguous, WAIT.` : ""}${ta.revFade && ta.revFade.active ? `
+
+  ⇄⇄ REVERSAL-FADE SETUP (BTC only — turns a LOW + full-reversal no-trade into a tradeable fade) ⇄⇄
+  CATALYST CHECK FIRST — SUBORDINATE to every WAIT/news rule. If a binary event is within 24h, OR the news search finds a real directional catalyst, OR any WAIT rule applies → OUTPUT WAIT and IGNORE this fade. Only read on if the tape is quiet.
+  Conditions are met: the daily does NOT confirm the 4h ${ta.t4}, AND the 1h has ${ta.revFade.pullState} (${ta.revFade.pullPct}% retraced) — the move in the trend direction has REVERSED against it. Backtested: continuing WITH the 4h trend here LOSES; FADING it returns +0.25R at 63% win (BTC, non-overlapping, p=0.001, stable across both test halves).
+  → PREFERRED (only if no catalyst): action ${ta.revFade.dir} — FADE the 4h ${ta.t4} trend (take the opposite side; the fresh reversal has momentum). Entry at price. Stop ${f(ta.revFade.stop)} (1.5xATR). T1 = ${f(ta.revFade.target)} (${ta.revFade.targetR}R — a fair, tested target; do NOT widen it). Confidence stays LOW (tier 0, modest edge) — state clearly this is a reversal-fade against the trend. If anything is ambiguous, WAIT.` : ""}
   ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (calibrated for THIS pair: <${ta._cal?.weak ?? 20} weak, ${ta._cal?.weak ?? 20}-${ta._cal?.strong ?? 25} developing, >${ta._cal?.strong ?? 25} strong)
   Volatility Meter (4h): ${ta.vmeter ? `${ta.vmeter.pct}% of this asset's normal → ${ta.vmeter.level}` : "n/a"}
   LEVEL FLIP: ${ta.flip && ta.flip.status !== "none" ? `${ta.flip.status.toUpperCase()} — ${ta.flip.dir}-break of ${f(ta.flip.level)}${ta.flip.note ? " (" + ta.flip.note + ")" : ""}. RULE: on a PENDING flip do NOT give a full-confidence breakout — cap at LOW and mark it pending; on a FALSE_BREAK treat the breakout as failed (lean the other way or WAIT); only a CONFIRMED flip supports a normal-confidence breakout trade.` : "no unconfirmed level break"}

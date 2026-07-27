@@ -106,17 +106,19 @@ export default function Landing({ onSelect }) {
             <div style={{marginTop:10,borderTop:"1px solid #1e293b",paddingTop:10}}>
               {CARDS.map(c=>{
                 const s=scans[c.id]; if(!s) return null;
-                const pass=s.ok&&s.tier>=2;
-                const col=!s.ok?"#fbbf24":pass?"#4ade80":"#f87171";
+                const fade=s.ok&&(s.rangeFade?.active||s.revFade?.active);
+                const fadeDir=s.rangeFade?.active?s.rangeFade.dir:s.revFade?.active?s.revFade.dir:null;
+                const pass=s.ok&&(s.tier>=2||fade);
+                const col=!s.ok?"#fbbf24":fade?"#c084fc":pass?"#4ade80":"#f87171";
                 return (
                   <button key={c.id} onClick={()=>onSelect(c.id)}
                     style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"8px 10px",margin:"4px 0",background:"#020617",border:`1px solid ${col}44`,borderRadius:8,cursor:"pointer",...mono,textAlign:"left"}}>
                     <span style={{fontSize:12,color:c.accentText,fontWeight:700,minWidth:70}}>{c.glyph} {c.name}</span>
                     <span style={{fontSize:11,color:"#94a3b8",flex:1}}>
-                      {s.ok?`1D ${s.tD} · 4h ${s.t4} · 1h ${s.t1}${s.rangeFade?.active?` · ⇄fade ${s.rangeFade.dir}`:""}`:`scan failed — ${s.reason||"n/a"}`}
+                      {s.ok?`1D ${s.tD} · 4h ${s.t4} · 1h ${s.t1}${fade?` · ⇄ ${fadeDir} fade`:""}`:`scan failed — ${s.reason||"n/a"}`}
                     </span>
-                    <span style={{fontSize:11,fontWeight:700,color:col,minWidth:120,textAlign:"right"}}>
-                      {!s.ok?"— proceed manually":pass?`tier ${s.tier} ✓ WORTH IT`:`tier ${s.tier} ✕ skip`}
+                    <span style={{fontSize:11,fontWeight:700,color:col,minWidth:130,textAlign:"right"}}>
+                      {!s.ok?"— proceed manually":fade?`⇄ FADE ✓ WORTH IT`:pass?`tier ${s.tier} ✓ WORTH IT`:`tier ${s.tier} ✕ skip`}
                     </span>
                   </button>
                 );

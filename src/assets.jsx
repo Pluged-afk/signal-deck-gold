@@ -27,7 +27,7 @@ const ff = v => (v||v===0) ? v.toFixed(5) : "n/a"; // forex 5-dp formatter
 // paid signal. `fetchSeries(interval, size)` is the asset's own candle fetcher;
 // `rangeFadeEnabled` matches the asset (gold/GBP true, BTC false). Fails soft:
 // returns { ok:false } on any error so a data hiccup never hard-blocks the user.
-const runTierScan = async ({ fetchSeries, rangeFadeEnabled, cal, tdCalls = 0 }) => {
+const runTierScan = async ({ fetchSeries, rangeFadeEnabled, revFadeEnabled, cal, tdCalls = 0 }) => {
   try {
     const [c1h, c4h, c1d] = await Promise.all([fetchSeries("1h"), fetchSeries("4h"), fetchSeries("1day")]);
     if (tdCalls) bumpDaily("td", tdCalls);
@@ -38,9 +38,9 @@ const runTierScan = async ({ fetchSeries, rangeFadeEnabled, cal, tdCalls = 0 }) 
     const ta = analyzeTimeframes({
       c15: null, c1h, c4h, c1d, c4hTimes: c4h.times, price, atr4h,
       prevClose: c1d && c1d.closes.length >= 2 ? c1d.closes[c1d.closes.length - 2] : null,
-      cal, rangeFadeEnabled,
+      cal, rangeFadeEnabled, revFadeEnabled,
     });
-    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, price };
+    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, revFade: ta.revFade, price };
   } catch (e) { return { ok: false, reason: e?.message || "scan failed" }; }
 };
 
@@ -719,7 +719,7 @@ const BTC = {
       const d = await r.json();
       return { times:d.map(k=>k[0]), opens:d.map(k=>parseFloat(k[1])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), closes:d.map(k=>parseFloat(k[4])), volumes:d.map(k=>parseFloat(k[5])) };
     };
-    return runTierScan({ fetchSeries, rangeFadeEnabled:false, tdCalls:0 });
+    return runTierScan({ fetchSeries, rangeFadeEnabled:false, revFadeEnabled:true, tdCalls:0 });
   },
   sessionsGuide:[
     { window:"13:00–16:00 UTC", label:"EU-US Overlap — best breakouts", quality:"best" },
@@ -888,7 +888,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
       const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
       td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick, pdh,pdl };
-      ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null });
+      ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, revFadeEnabled:true }); // BTC: reversal-fade enabled (cleared the fade bar, p=0.001, both halves)
       addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
     else addLog("⚠ Binance candles unavailable — MTF/patterns/ATR skipped (Binance may be geo-restricted or rate-limited in your region). Price falls back to CoinGecko; TA scores NEUTRAL.");

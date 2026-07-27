@@ -143,6 +143,15 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           if(parsed._rangeFadeFired) addLog(`RANGE-FADE fired: ${parsed.action} against the 4h ${ta.t4} trend (mean-reversion, tier 0 → LOW).`);
           else if(parsed.action==="WAIT") addLog(`Range regime active but model chose WAIT (catalyst or ambiguity) — fade correctly deferred.`);
         }
+        // Reversal-fade (BTC): same transparency — fired when the model shorts a BULL
+        // trend (or longs a BEAR) inside an active reversal-fade set-up.
+        if(ta.revFade?.active){
+          parsed._revFade = ta.revFade;
+          const opposesTrend = (parsed.action==="LONG"&&ta.t4==="BEAR")||(parsed.action==="SHORT"&&ta.t4==="BULL");
+          parsed._revFadeFired = parsed.action!=="WAIT" && opposesTrend;
+          if(parsed._revFadeFired) addLog(`REVERSAL-FADE fired: ${parsed.action} against the 4h ${ta.t4} trend (${ta.revFade.pullState} reversal, tier 0 → LOW).`);
+          else if(parsed.action==="WAIT") addLog(`Reversal-fade set-up active but model chose WAIT (catalyst or ambiguity) — fade correctly deferred.`);
+        }
       }
 
       parsed._marginal = computeMarginal(ta, evNow, Date.now());
@@ -179,11 +188,17 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       const scan = await config.scan(keys).catch(e=>({ok:false,reason:e?.message}));
       setScanResult({ ...scan, ts:Date.now() });
       setMeter(dailyMeter());
-      if(scan.ok && scan.tier != null && scan.tier < TIER_GATE){
+      // Worth a paid signal if the trend tier is 2+ OR a validated fade set-up is
+      // live (range-fade gold/GBP, reversal-fade BTC). Fades are LOW-tier but
+      // tradeable, so they must NOT be blocked by the tier gate — that is exactly
+      // the "turn a no-trade into a tradeable win" case.
+      const fade = scan.rangeFade?.active || scan.revFade?.active;
+      if(scan.ok && scan.tier != null && scan.tier < TIER_GATE && !fade){
         setPrechecking(false);
-        addLog(`Free scan: tier ${scan.tier} (< ${TIER_GATE}) — paid signal blocked to save cost.`);
+        addLog(`Free scan: tier ${scan.tier} (< ${TIER_GATE}) and no fade set-up — paid signal blocked to save cost.`);
         return; // hard block, no paid call
       }
+      if(fade) addLog(`Free scan: ${scan.revFade?.active?"reversal":"range"}-fade set-up live — paid signal allowed (tradeable fade against the trend).`);
     }
     // Section 5: force a fresh calendar pull so the pre-check's binary gate and
     // the event strip are computed from live data, not an earlier cached value.
@@ -280,25 +295,29 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
             <p style={{fontSize:11,color:"#fde68a",...mono,margin:0,lineHeight:1.5}}>{s.reason||"data unavailable"}. The paid signal is NOT blocked by this (fail-open) — you can still Refresh, or try the scan again.</p>
           </div>
         );
-        const pass=s.tier>=TIER_GATE;
-        const col=pass?"#4ade80":"#f87171";
+        const fadeObj = s.rangeFade?.active ? s.rangeFade : s.revFade?.active ? s.revFade : null;
+        const fadeKind = s.revFade?.active ? "REVERSAL-FADE" : "RANGE-FADE";
+        const pass = s.tier>=TIER_GATE || !!fadeObj;
+        const col = fadeObj ? "#c084fc" : pass ? "#4ade80" : "#f87171";
         const tierTxt={3:"tier 3 — daily+weekly+1h all confirm (HIGH-eligible)",2:"tier 2 — daily + one other confirm (MEDIUM)",1:"tier 1 — daily only (MEDIUM)",0:"tier 0 — daily does NOT confirm (LOW)"}[s.tier]||`tier ${s.tier}`;
         return (
-          <div style={{...card,background:pass?"#04140a":"#160606",border:`2px solid ${col}`,marginBottom:10}}>
+          <div style={{...card,background:fadeObj?"#12081f":pass?"#04140a":"#160606",border:`2px solid ${col}`,marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <p style={{fontSize:13,fontWeight:700,color:col,margin:0}}>⚡ Free scan · {tierTxt}</p>
-              <span style={{...mono,fontSize:11,color:col,fontWeight:700}}>{pass?"✓ WORTH A PAID SIGNAL":"✕ BELOW TIER 2 — SKIP"}</span>
+              <p style={{fontSize:13,fontWeight:700,color:col,margin:0}}>⚡ Free scan · {fadeObj?`⇄ ${fadeKind} ${fadeObj.dir}`:tierTxt}</p>
+              <span style={{...mono,fontSize:11,color:col,fontWeight:700}}>{fadeObj?"✓ FADE SETUP — WORTH IT":pass?"✓ WORTH A PAID SIGNAL":"✕ BELOW TIER 2 — SKIP"}</span>
             </div>
             <p style={{...mono,fontSize:11,color:"#94a3b8",margin:"6px 0 0",lineHeight:1.5}}>
               1W {s.tW} · 1D {s.tD} · 4h {s.t4} · 1h {s.t1}{s.adx!=null?` · ADX ${s.adx.toFixed(0)}`:""}
-              {s.rangeFade?.active?` · ⇄ RANGE-FADE ${s.rangeFade.dir} bias`:""}
+              {s.revFade?.active?` · ${s.revFade.pullState} reversal`:""}
             </p>
-            <p style={{fontSize:11,color:pass?"#86efac":"#fca5a5",...mono,margin:"6px 0 0",lineHeight:1.5}}>
-              {pass
+            <p style={{fontSize:11,color:fadeObj?"#e9d5ff":pass?"#86efac":"#fca5a5",...mono,margin:"6px 0 0",lineHeight:1.5}}>
+              {fadeObj
+                ? `Fade set-up live: the trend trade loses here, so this signals a ${fadeObj.dir} AGAINST the 4h ${s.t4} trend. Hit “Refresh ↗ (paid)” for the fade trade (LOW confidence, small target). This is the "no-trade → tradeable" case.`
+                : pass
                 ? "Hit “Refresh ↗ (paid)” to run the full AI signal — this setup cleared the tier gate."
-                : "Paid signal blocked to save your money — tier 0/1 is LOW/negative-expectancy. Re-scan (free) at the next 4h close (00/04/08/12/16/20 UTC) during a good session."}
+                : "Paid signal blocked to save your money — tier 0/1 is LOW/negative-expectancy and no fade set-up. Re-scan (free) at the next 4h close (00/04/08/12/16/20 UTC) during a good session."}
             </p>
-            <p style={{fontSize:9,color:"#475569",margin:"6px 0 0"}}>Computed locally from candles · €0 · no AI call. This is the same tier the paid signal would use.</p>
+            <p style={{fontSize:9,color:"#475569",margin:"6px 0 0"}}>Computed locally from candles · €0 · no AI call. Same tier/fade the paid signal would use.</p>
           </div>
         );
       })()}
@@ -418,7 +437,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
                 {sig.action==="WAIT"&&sig.wait_type&&sig.wait_type!=="none"&&<span style={{...mono,fontSize:11,fontWeight:600,color:waitTypeMeta(sig.wait_type).col}}>{waitTypeMeta(sig.wait_type).label}</span>}
                 {/* Regime chip (gold/GBP only — spec §5: show the classification so a
                     direction change between refreshes is explained, not just observed). */}
-                {sig._regime&&sig._regime!=="NORMAL"&&(()=>{const r=sig._regime==="RANGE";return <span title={r?"Range regime: low ADX + daily does not confirm. Mean-reversion (fade) bias is active on Gold/GBP.":"Trend regime: daily confirms 4h + strong ADX. Normal with-trend logic."} style={{...mono,fontSize:11,fontWeight:600,color:r?"#c084fc":"#38bdf8",padding:"2px 7px",background:"#1e293b",border:`1px solid ${r?"#7e22ce":"#334155"}`,borderRadius:6}}>{r?"⇄ RANGE":"➤ TREND"}</span>;})()}
+                {sig._regime&&sig._regime!=="NORMAL"&&(()=>{const fade=sig._regime==="RANGE"||sig._regime==="REVERSAL";const label=sig._regime==="RANGE"?"⇄ RANGE":sig._regime==="REVERSAL"?"⇄ REVERSAL":"➤ TREND";const title=sig._regime==="RANGE"?"Range regime: low ADX + daily does not confirm. Mean-reversion fade bias (Gold/GBP).":sig._regime==="REVERSAL"?"Reversal regime: daily does not confirm + 1h severely/fully reversed. Reversal-fade bias (BTC).":"Trend regime: daily confirms 4h + strong ADX. Normal with-trend logic.";return <span title={title} style={{...mono,fontSize:11,fontWeight:600,color:fade?"#c084fc":"#38bdf8",padding:"2px 7px",background:"#1e293b",border:`1px solid ${fade?"#7e22ce":"#334155"}`,borderRadius:6}}>{label}</span>;})()}
                 {(sig._sources||[]).map(s=><span key={s} style={{...mono,fontSize:10,color:"#4ade80"}}>✓ {s}</span>)}
               </div>
             </div>
@@ -459,6 +478,21 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
               {config.symbol} mean-reversion logic fired: low ADX + no daily trend + price stretched {sig._rangeFade?.devATR}×ATR from the mean.
               Tested edge <b>+0.13R at ~72-77% win</b> in range regimes (non-overlapping, p&lt;0.05, Gold/GBP only).
               Target is the mean (BB mid, {config.pricePrefix}{fmt(sig._rangeFade?.bbMid?.toFixed(dec))}) — a deliberately small ~{sig._rangeFade?.targetR}R target. Small-win / occasional-full-loss profile; kept at LOW confidence, minimum size.
+            </p>
+          </div>
+        )}
+
+        {/* Reversal-fade banner (BTC) — same distinct treatment: the "no-trade turned
+            tradeable" case fired, opposing the 4h trend on a full/severe reversal. */}
+        {sig._revFadeFired&&(
+          <div style={{...card,background:"#1a0b26",border:"2px solid #a855f7",marginBottom:10}}>
+            <p style={{fontSize:13,fontWeight:700,color:"#c084fc",margin:"0 0 4px"}}>
+              ⇄ REVERSAL-FADE ACTIVE — this {sig.action} OPPOSES the 4h {sig._ta?.t4} trend by design
+            </p>
+            <p style={{fontSize:11,color:"#e9d5ff",...mono,margin:0,lineHeight:1.55}}>
+              {config.symbol} reversal-fade fired: daily doesn't confirm the 4h AND the 1h {sig._revFade?.pullState} ({sig._revFade?.pullPct}% retraced) — the trend move reversed, so continuing loses and fading wins.
+              Tested edge <b>+0.25R at ~63% win</b> (BTC, non-overlapping, p=0.001, both test halves).
+              Target ~{sig._revFade?.targetR}R ({config.pricePrefix}{fmt(sig._revFade?.target?.toFixed(dec))}). Modest edge; kept at LOW confidence, minimum size.
             </p>
           </div>
         )}
