@@ -428,7 +428,7 @@ The provided spot price is fetched live at request time and cross-checked agains
 You MUST always include a "wait_type" string and a "triggers" object — for LONG and SHORT too, not only WAIT.
 
 wait_type = one of:
-- "binary_event"  : a binary event (FOMC/CPI/NFP/PCE/ECB) is UPCOMING within the next 24h. Already-released events do NOT count once 30+ minutes have passed since release.
+- "binary_event"  : a binary event (FOMC/CPI/NFP/PCE/ECB) is UPCOMING within the next 24h ONLY. An event 24–72h away is NOT a binary_event WAIT — it is CAUTION ONLY (still output a directional call, just note the event and advise reduced size). Never force WAIT for an event more than 24h out. Already-released events do NOT count once 30+ minutes have passed since release.
 - "low_confidence" : signal quality <50 or the timeframes/indicators conflict
 - "no_setup"      : market ranging, no clear direction
 - "wrong_session" : off-peak / low-volume window

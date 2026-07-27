@@ -141,7 +141,7 @@ ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MAC
 YOUR JOB (web search only for these):
 1. NEWS: Top gold market news last 24h. Fed commentary, inflation, geopolitical risk, ETF flows (GLD/IAU), VIX. Bloomberg/Reuters preferred.
 2. KEY LEVELS: Nearest major XAU/USD institutional support/resistance. Confirm or refine the provided S/R.
-3. MACRO CONTEXT: FOMC/CPI/NFP/PCE within 48h? Fed speakers today? Geopolitical events?
+3. MACRO CONTEXT: is any FOMC/CPI/NFP/PCE scheduled, and WHEN? Only an event within 24h forces WAIT (wait_type binary_event); an event 24–72h away is CAUTION ONLY — still give a directional call, just note it and advise reduced size. Do NOT treat a 2-day-out event as a WAIT trigger. Fed speakers today? Geopolitical events?
 4. BIAS SYNTHESIS: All pre-computed data + research → highest-probability directional bias.
 
 7-STEP SCORECARD RULES (+2 TA rows = 9 scored items):
@@ -155,7 +155,7 @@ YOUR JOB (web search only for these):
 (COT is NOT scored — it is context only. Do not create a "cot" scorecard entry.)
 
 SIGNAL RULES:
-- Binary event (FOMC/CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. An event that has ALREADY RELEASED does NOT force WAIT: once 30+ minutes have passed since release, trade the post-event trend normally (use the POST-NFP guidance when provided). Never output wait_type binary_event for a past release.
+- Binary event (FOMC/CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. An event 24–72h away is CAUTION ONLY (note it, reduce size) — it does NOT force WAIT. An event that has ALREADY RELEASED does NOT force WAIT: once 30+ minutes have passed since release, trade the post-event trend normally (use the POST-NFP guidance when provided). Never output wait_type binary_event for a past release or for an event more than 24h out.
 - ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
@@ -486,7 +486,7 @@ KEY CABLE LOGIC:
 7. NEWS/MACRO: GBP-supportive catalyst / risk-on = PASS; GBP-negative / risk-off = FAIL; unclear = NEUTRAL.
 
 SIGNAL RULES (calibrated — do NOT over-output WAIT; cable is a normal-trending major):
-- Binary event (BOE/FOMC/UK CPI/UK GDP/UK jobs/US CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
+- Binary event (BOE/FOMC/UK CPI/UK GDP/UK jobs/US CPI/NFP/PCE) UPCOMING within the next 24h → WAIT. An event 24–72h away is CAUTION ONLY (note it, reduce size) — it does NOT force WAIT. Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
 - ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Output WAIT ONLY if signal_quality <30 OR a binary event is within 24h. Weaker setups → the direction at LOW confidence, NOT a blanket WAIT.
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still signal but cap confidence at LOW. Only WAIT if all three timeframes disagree.
 - ADX for cable is calibrated to its own distribution (weak <18, strong >22) — cable trends less sharply than gold, so a "developing" ADX of ~20 is normal and tradeable, NOT a reason to WAIT.
@@ -770,7 +770,7 @@ KEY BTC LOGIC:
 (Dominance and the 200 SMA are NOT scored — context only. Do not create "dominance" or "rsi_sma" scorecard entries.)
 
 SIGNAL RULES:
-- Binary event (FOMC/CPI/PCE) UPCOMING within the next 24h → WAIT (never hold BTC through macro). Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
+- Binary event (FOMC/CPI/PCE) UPCOMING within the next 24h → WAIT (never hold BTC through macro). An event 24–72h away is CAUTION ONLY (note it, reduce size) — it does NOT force WAIT. Already-released events do NOT force WAIT once 30+ min have passed — trade the post-event trend.
 - ALWAYS output a directional call (LONG or SHORT) unless genuinely no setup. Base direction on the balance of the scorecard + trend context. Output WAIT ONLY if signal_quality <35 OR a binary event is within 24h. Weaker setups → output the direction with LOW confidence rather than a blanket WAIT.
 - MULTI-TIMEFRAME: prefer trading with the 4h trend. If 4h and 1h conflict → still output the signal but cap confidence at LOW (counter-trend risk — advise reduced size). Only WAIT if all three timeframes (4h/1h/15m) disagree. 15m is for entry timing.
 - A reversal candle pattern at a key level against the trend caps confidence at MEDIUM and can flip the call to WAIT.
