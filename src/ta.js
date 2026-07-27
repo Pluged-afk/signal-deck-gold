@@ -337,7 +337,7 @@ export const flipCheck = (c4h, sr, atr4h) => {
 // ─── master aggregator ───────────────────────────────────────────────────────
 // Each c* = { opens, highs, lows, closes, volumes }. `cal` = per-asset calibrated
 // ADX bars ({weak,strong}); defaults to gold/BTC's 20/25 when omitted.
-export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, prevClose, cal }) => {
+export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, prevClose, cal, rangeFadeEnabled = false }) => {
   // c1h and c4h are required (master timeframes); c15 is optional (entry timing);
   // c1d is optional but strongly recommended — see dailyConflict below.
   const t4 = trendOf(c4h.closes), t1 = trendOf(c1h.closes), t15 = c15 ? trendOf(c15.closes) : "FLAT";
@@ -395,6 +395,41 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
   const dailyConflict = mtfAligned && tD !== "FLAT" && tD !== t4;
   const sigOf = t => t === "BULL" ? "LONG" : t === "BEAR" ? "SHORT" : "—";
 
+  // ── RANGE-FADE regime (Gold + GBP only; opt-in via rangeFadeEnabled) ──────────
+  // The ONLY logic path in this engine that can oppose the 4h trend. Activates ONLY
+  // when the EXACT conditions validated in the regime audit are all met — otherwise
+  // this stays null and every downstream consumer behaves exactly as before:
+  //   1. ADX(4h) strictly BELOW this pair's own weak bar (gold <20, GBP <18)
+  //   2. the DAILY trend does NOT confirm the 4h (tD !== t4) — i.e. no daily trend
+  //   3. the 4h itself is not flat (a real, if weak, directional read exists)
+  //   4. price is stretched ≥0.30×ATR from the 20-period mean (room to revert)
+  // Measured (non-overlapping, paired): fading toward the BB mid here returns
+  // +0.13R/signal at 72-77% win (gold p=0.034, GBP p=0.007); CONTINUATION loses
+  // -0.2R. The same fade LOSES in trend regime (-0.01/-0.05R) — hence it is gated to
+  // this regime only, never applied generally. Target is the BB mid, hard-capped at
+  // 1.0R (a small-win / occasional-full-loss profile — deliberately NOT widened).
+  // Borderline setups fall through to null => normal trend-following logic (spec §2).
+  let rangeFade = null, regimeLabel = null;
+  if (rangeFadeEnabled) {
+    const weakBar = cal ? cal.adxWeak : 20;
+    const dev = (bb && bb.mid != null) ? price - bb.mid : null;
+    const inRange = adx != null && adx < weakBar && t4 !== "FLAT" && tD !== t4
+      && dev != null && Math.abs(dev) >= 0.30 * atr4h;
+    if (inRange) {
+      const d = dev > 0 ? -1 : 1;                                   // fade TOWARD the mean
+      const risk = 1.5 * atr4h;
+      const targetDist = Math.min(Math.abs(dev), risk);            // BB mid, hard-capped at 1.0R
+      rangeFade = {
+        active: true, dir: d > 0 ? "LONG" : "SHORT", bbMid: bb.mid,
+        target: price + d * targetDist, stop: price - d * risk,
+        devATR: +(Math.abs(dev) / atr4h).toFixed(2), targetR: +(targetDist / risk).toFixed(2),
+      };
+      regimeLabel = "RANGE";
+    } else {
+      regimeLabel = (dailyConfirms && adx != null && adx > (cal ? cal.adxStrong : 25)) ? "TREND" : "NORMAL";
+    }
+  }
+
   // trend-context (weighted inputs for the AI)
   const adxBars = cal ? { weak: cal.adxWeak, strong: cal.adxStrong } : { weak: 20, strong: 25 };
   const adxPrevR = calcADX(c4h.highs.slice(0, -3), c4h.lows.slice(0, -3), c4h.closes.slice(0, -3), 14);
@@ -441,7 +476,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
     mtf, entries, atr4h, bb,
     mtfConflict, allDisagree,
     strength, structure, divergence, sessionBias: sBias, prevDayBias: pdBias,
-    vmeter, flip, _cal: adxBars,
+    vmeter, flip, rangeFade, regimeLabel, _cal: adxBars,
   };
 };
 
@@ -527,7 +562,13 @@ export const taPromptBlock = (ta, f) => {
   This is the STRONGEST measured predictor in this engine, and the DAILY carries almost all of it. Measured separately at a fixed target: the daily is worth +0.22/+0.24/+0.32R (p<0.000001 on gold/GBP/BTC), the weekly about half that, and the 1h NOTHING (p=0.38/0.87/0.45). So a set-up where the 1h and weekly agree but the DAILY dissents is a BAD set-up (28-45% win) even though two timeframes "agree" — do not be fooled by the count.
   Backtested by tier: 0 = 35-53% win / negative expectancy · 1 = 56-62% · 2 = 55-60% · 3 = 58-62%.
   RULE: tier 3 → HIGH confidence justified if the scorecard agrees. tier 1-2 → cap at MEDIUM. tier 0 → cap at LOW and lean WAIT unless there is a strong explicit catalyst. This signal: tier ${ta.htfTier} → ${ta.htfTier === 3 ? "HIGH allowed" : ta.htfTier >= 1 ? "cap at MEDIUM" : "cap at LOW / lean WAIT"}.
-  ★ TARGETS: ${ta.htfTier >= 1 ? "set T1 = 1.0R (= 1.5x ATR from entry) and T2 = 2.0R (= 3.0x ATR). Measured T1 hit rate at this tier is 56-62%; stretching T1 to 1.5R drops it to 40-49%." : "set T1 = 0.75R (= 1.125x ATR from entry) and T2 = 1.5R (= 2.25x ATR) — but note this tier loses money on average at ANY target, so a closer target is not a fix. Prefer WAIT."}`}${ta.dailyConflict ? `\n  ⚠ DAILY CONFLICT — the daily trend (${ta.tD}) directly OPPOSES the aligned 4h/1h direction. State this in the reasoning.` : ""}
+  ★ TARGETS: ${ta.htfTier >= 1 ? "set T1 = 1.0R (= 1.5x ATR from entry) and T2 = 2.0R (= 3.0x ATR). Measured T1 hit rate at this tier is 56-62%; stretching T1 to 1.5R drops it to 40-49%." : "set T1 = 0.75R (= 1.125x ATR from entry) and T2 = 1.5R (= 2.25x ATR) — but note this tier loses money on average at ANY target, so a closer target is not a fix. Prefer WAIT."}`}${ta.dailyConflict ? `\n  ⚠ DAILY CONFLICT — the daily trend (${ta.tD}) directly OPPOSES the aligned 4h/1h direction. State this in the reasoning.` : ""}${ta.rangeFade && ta.rangeFade.active ? `
+
+  ⇄⇄ RANGE-FADE REGIME (Gold/GBP only — the one tested exception to "trade with the trend") ⇄⇄
+  CATALYST CHECK FIRST — this bias is SUBORDINATE to every WAIT/news rule. If a binary event is within 24h, OR your news search finds a real directional catalyst (surprise data, central-bank headline, geopolitical shock), OR any WAIT rule already applies → OUTPUT WAIT (or follow the catalyst) and IGNORE this fade entirely. Only read on if the tape is genuinely quiet.
+  Regime conditions are met: ADX ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} is below this pair's weak bar (ranging), the daily does NOT confirm the 4h, and price is ${ta.rangeFade.devATR}xATR above/below the 20-period mean (BB mid ${f(ta.rangeFade.bbMid)}).
+  In THIS regime the tested edge REVERSES the usual rule: FADE toward the mean, do NOT follow the 4h ${ta.t4} trend. Continuation here is measured to LOSE (~-0.2R, 37% win). The fade returns +0.13R at 72-77% win (non-overlapping, p<0.05, gold & GBP). This is a small-win / occasional-full-loss profile.
+  → PREFERRED (only if no catalyst): action ${ta.rangeFade.dir} (a mean-reversion fade, AGAINST the 4h trend by design). Entry at price. Stop ${f(ta.rangeFade.stop)} (1.5xATR on the far side). T1 = ${f(ta.rangeFade.target)} (the BB mid — a ${ta.rangeFade.targetR}R SUB-1R target; do NOT widen it and do NOT set a T2 beyond the mean; the edge is in the small, reliable reversion). Confidence stays LOW (this is tier 0 and a small edge) — state clearly that this is a range-fade against the trend. If anything is ambiguous, WAIT.` : ""}
   ADX(4h): ${ta.adx != null ? ta.adx.toFixed(1) : "n/a"} → ${ta.adxClass} trend (calibrated for THIS pair: <${ta._cal?.weak ?? 20} weak, ${ta._cal?.weak ?? 20}-${ta._cal?.strong ?? 25} developing, >${ta._cal?.strong ?? 25} strong)
   Volatility Meter (4h): ${ta.vmeter ? `${ta.vmeter.pct}% of this asset's normal → ${ta.vmeter.level}` : "n/a"}
   LEVEL FLIP: ${ta.flip && ta.flip.status !== "none" ? `${ta.flip.status.toUpperCase()} — ${ta.flip.dir}-break of ${f(ta.flip.level)}${ta.flip.note ? " (" + ta.flip.note + ")" : ""}. RULE: on a PENDING flip do NOT give a full-confidence breakout — cap at LOW and mark it pending; on a FALSE_BREAK treat the breakout as failed (lean the other way or WAIT); only a CONFIRMED flip supports a normal-confidence breakout trade.` : "no unconfirmed level break"}

@@ -123,6 +123,22 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         }
       }
 
+      // Range-fade transparency (spec §4/§5, gold+GBP only). regimeLabel is null on
+      // BTC and on assets without daily candles, so nothing shows there. We record the
+      // regime for EVERY signal so a direction change between refreshes is explained,
+      // and separately flag when the fade actually FIRED — i.e. the model's action
+      // opposes the 4h trend inside an active range regime.
+      if(ta?.regimeLabel){
+        parsed._regime = ta.regimeLabel; // "RANGE" | "TREND" | "NORMAL"
+        if(ta.rangeFade?.active){
+          parsed._rangeFade = ta.rangeFade;
+          const opposesTrend = (parsed.action==="LONG"&&ta.t4==="BEAR")||(parsed.action==="SHORT"&&ta.t4==="BULL");
+          parsed._rangeFadeFired = parsed.action!=="WAIT" && opposesTrend;
+          if(parsed._rangeFadeFired) addLog(`RANGE-FADE fired: ${parsed.action} against the 4h ${ta.t4} trend (mean-reversion, tier 0 → LOW).`);
+          else if(parsed.action==="WAIT") addLog(`Range regime active but model chose WAIT (catalyst or ambiguity) — fade correctly deferred.`);
+        }
+      }
+
       parsed._marginal = computeMarginal(ta, evNow, Date.now());
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
@@ -331,6 +347,9 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
                 {/* Section 3: per-asset Volatility Meter (4h ATR vs THIS asset's own 20-bar baseline) */}
                 {sig._vmeter&&(()=>{const v=sig._vmeter;const c=v.level==="LOW"?"#94a3b8":v.level==="NORMAL"?"#4ade80":v.level==="HIGH"?"#fb923c":"#f87171";return <span title="current 4h volatility vs this asset's own normal" style={{...mono,fontSize:11,color:c,padding:"2px 7px",background:"#1e293b",border:`1px solid ${v.level==="EXTREME"?"#dc2626":"#334155"}`,borderRadius:6}}>📊 Vol {v.pct}% · {v.level}</span>;})()}
                 {sig.action==="WAIT"&&sig.wait_type&&sig.wait_type!=="none"&&<span style={{...mono,fontSize:11,fontWeight:600,color:waitTypeMeta(sig.wait_type).col}}>{waitTypeMeta(sig.wait_type).label}</span>}
+                {/* Regime chip (gold/GBP only — spec §5: show the classification so a
+                    direction change between refreshes is explained, not just observed). */}
+                {sig._regime&&sig._regime!=="NORMAL"&&(()=>{const r=sig._regime==="RANGE";return <span title={r?"Range regime: low ADX + daily does not confirm. Mean-reversion (fade) bias is active on Gold/GBP.":"Trend regime: daily confirms 4h + strong ADX. Normal with-trend logic."} style={{...mono,fontSize:11,fontWeight:600,color:r?"#c084fc":"#38bdf8",padding:"2px 7px",background:"#1e293b",border:`1px solid ${r?"#7e22ce":"#334155"}`,borderRadius:6}}>{r?"⇄ RANGE":"➤ TREND"}</span>;})()}
                 {(sig._sources||[]).map(s=><span key={s} style={{...mono,fontSize:10,color:"#4ade80"}}>✓ {s}</span>)}
               </div>
             </div>
@@ -358,6 +377,22 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
             System time: {egyClockStr(now)} EGY · UTC: {utcClockStr(now)}
           </p>
         </div>
+
+        {/* Section 4 (spec §4): RANGE-FADE banner — visually distinct from every normal
+            signal so it is immediately obvious this counter-trend path fired. Only shows
+            when the model's action actually opposed the 4h trend inside a range regime. */}
+        {sig._rangeFadeFired&&(
+          <div style={{...card,background:"#1a0b26",border:"2px solid #a855f7",marginBottom:10}}>
+            <p style={{fontSize:13,fontWeight:700,color:"#c084fc",margin:"0 0 4px"}}>
+              ⇄ RANGE-FADE ACTIVE — this {sig.action} OPPOSES the 4h {sig._ta?.t4} trend by design
+            </p>
+            <p style={{fontSize:11,color:"#e9d5ff",...mono,margin:0,lineHeight:1.55}}>
+              {config.symbol} mean-reversion logic fired: low ADX + no daily trend + price stretched {sig._rangeFade?.devATR}×ATR from the mean.
+              Tested edge <b>+0.13R at ~72-77% win</b> in range regimes (non-overlapping, p&lt;0.05, Gold/GBP only).
+              Target is the mean (BB mid, {config.pricePrefix}{fmt(sig._rangeFade?.bbMid?.toFixed(dec))}) — a deliberately small ~{sig._rangeFade?.targetR}R target. Small-win / occasional-full-loss profile; kept at LOW confidence, minimum size.
+            </p>
+          </div>
+        )}
 
         {/* Section 3c: marginal-setup hero banner (visible regardless of confidence) */}
         <MarginalBanner conditions={sig._marginal}/>
