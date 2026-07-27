@@ -6,6 +6,7 @@ import {
   loadKeys, saveKeys, WAIT_RULES, ACCURACY_RULES, PERMANENT_FOOTER, egyptWindow, urgencyCol, inWindow,
   bumpSignalCount, signalCount, EST_COST, EST_COST_HIGH,
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
+  dailyMeter, bumpDaily, TD_FREE_DAILY,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -31,8 +32,12 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   const [prechecking, setPrechecking] = useState(false);
   const [tdWarn, setTdWarn] = useState(false);
   const [costN, setCostN] = useState(signalCount());
+  const [scanResult, setScanResult] = useState(null); // free tier-scan result (gate)
+  const [scanning, setScanning] = useState(false);
+  const [meter, setMeter] = useState(dailyMeter);     // daily paid/TD tracker
   const logRef = useRef([]);
   const usesTD = config.keyFields.some(f => f.field === "td");
+  const TIER_GATE = 2; // hard-block the paid signal below this scanned tier
 
   const addLog = msg => { logRef.current=[...logRef.current,`[${new Date().toLocaleTimeString()}] ${msg}`]; setDataLog([...logRef.current]); };
 
@@ -75,6 +80,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
       addLog("Sending to AI for news + synthesis...");
       setCostN(bumpSignalCount()); // count this paid Anthropic call
+      setMeter(bumpDaily("paid")); // daily paid-signal tracker
       const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES + ACCURACY_RULES, userContent:pkg, addLog, maxSearches:(nfpAsset&&postNfp.active)?6:5, useProxy:signalProxyEnabled(config.id) });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
@@ -147,6 +153,17 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     finally{ setLoading(false); }
   }, [keys, config, postNfp.active, nfpAsset, events, refresh]);
 
+  // FREE standalone tier scan — no paid call, no interval gate. Lets the user check
+  // "is this worth paying for?" as often as they like for €0.
+  const scanOnly = useCallback(async () => {
+    if(!config.scan) return;
+    setScanning(true); setError(null); setPrecheck(null);
+    const scan = await config.scan(keys).catch(e=>({ok:false,reason:e?.message}));
+    setScanResult({ ...scan, ts:Date.now() });
+    setMeter(dailyMeter());
+    setScanning(false);
+  }, [keys, config]);
+
   // Free local pre-check first; only call the paid signal if all conditions pass.
   const attemptSignal = useCallback(async (opts={}) => {
     if(!keys.anthropic){ setError("Anthropic API key required."); setKeysSet(false); return; }
@@ -154,6 +171,20 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     if(usesTD && !keys.td && !opts.ackTD){ setTdWarn(true); setPrecheck(null); return; }
     setTdWarn(false);
     setPrechecking(true); setError(null);
+    // HARD TIER GATE (free): compute the higher-timeframe tier locally with no AI
+    // call and BLOCK the paid signal below tier 2 — the user's cost-protection
+    // choice. Fails OPEN: if the scan errors (data hiccup / no key) we do NOT block,
+    // so a fetch problem can never trap the user; the existing gates still apply.
+    if(config.scan){
+      const scan = await config.scan(keys).catch(e=>({ok:false,reason:e?.message}));
+      setScanResult({ ...scan, ts:Date.now() });
+      setMeter(dailyMeter());
+      if(scan.ok && scan.tier != null && scan.tier < TIER_GATE){
+        setPrechecking(false);
+        addLog(`Free scan: tier ${scan.tier} (< ${TIER_GATE}) — paid signal blocked to save cost.`);
+        return; // hard block, no paid call
+      }
+    }
     // Section 5: force a fresh calendar pull so the pre-check's binary gate and
     // the event strip are computed from live data, not an earlier cached value.
     const freshAll = await refresh(true).catch(()=>null);
@@ -191,7 +222,8 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {ts&&<span style={{...mono,fontSize:11,color:"#475569"}}>{ts.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>}
-          {keysSet&&<button onClick={attemptSignal} disabled={loading||prechecking} style={primaryBtn}>{prechecking?"Checking...":loading?"Scanning...":"Refresh ↗"}</button>}
+          {keysSet&&config.scan&&<button onClick={scanOnly} disabled={loading||prechecking||scanning} style={ghostBtn} title="Free tier scan — no API cost. Checks if a setup is worth a paid signal.">{scanning?"Scanning…":"⚡ Scan (free)"}</button>}
+          {keysSet&&<button onClick={attemptSignal} disabled={loading||prechecking||scanning} style={primaryBtn}>{prechecking?"Checking...":loading?"Scanning...":"Refresh ↗ (paid)"}</button>}
           <button onClick={()=>setKeysSet(false)} style={ghostBtn}>⚙ Keys</button>
         </div>
       </div>
@@ -227,12 +259,49 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         </div>
       )}
 
-      {/* Session cost (fix 3) */}
-      {costN>0&&(
-        <p style={{...mono,fontSize:10,color:"#64748b",margin:"0 0 8px",textAlign:"right"}}>
-          Session: {costN} paid signal{costN>1?"s":""} · €{(costN*EST_COST).toFixed(2)} – €{(costN*EST_COST_HIGH).toFixed(2)} (est.)
-        </p>
+      {/* Cost & API tracker — session paid cost + today's totals + free-tier headroom */}
+      {(costN>0||meter.paid>0||meter.scans>0)&&(
+        <div style={{...mono,fontSize:10,color:"#64748b",margin:"0 0 8px",textAlign:"right",lineHeight:1.6}}>
+          {costN>0&&<div>Session: {costN} paid · €{(costN*EST_COST).toFixed(2)}–€{(costN*EST_COST_HIGH).toFixed(2)} (est.)</div>}
+          <div>
+            Today: <span style={{color:"#94a3b8"}}>{meter.paid} paid</span> · €{(meter.paid*EST_COST).toFixed(2)}–€{(meter.paid*EST_COST_HIGH).toFixed(2)}
+            {" · "}{meter.scans} free scan{meter.scans===1?"":"s"}
+            {usesTD&&<span style={{color:meter.td>TD_FREE_DAILY*0.8?"#fb923c":"#475569"}}> · ~{meter.td}/{TD_FREE_DAILY} TD calls</span>}
+          </div>
+        </div>
       )}
+
+      {/* FREE SCAN result + tier gate verdict (no AI cost) */}
+      {scanResult&&!loading&&(()=>{
+        const s=scanResult;
+        if(!s.ok) return (
+          <div style={{...card,background:"#1a1206",border:"1px solid #a16207",marginBottom:10}}>
+            <p style={{fontSize:12,fontWeight:700,color:"#fbbf24",margin:"0 0 3px"}}>⚡ Free scan — couldn't compute the tier</p>
+            <p style={{fontSize:11,color:"#fde68a",...mono,margin:0,lineHeight:1.5}}>{s.reason||"data unavailable"}. The paid signal is NOT blocked by this (fail-open) — you can still Refresh, or try the scan again.</p>
+          </div>
+        );
+        const pass=s.tier>=TIER_GATE;
+        const col=pass?"#4ade80":"#f87171";
+        const tierTxt={3:"tier 3 — daily+weekly+1h all confirm (HIGH-eligible)",2:"tier 2 — daily + one other confirm (MEDIUM)",1:"tier 1 — daily only (MEDIUM)",0:"tier 0 — daily does NOT confirm (LOW)"}[s.tier]||`tier ${s.tier}`;
+        return (
+          <div style={{...card,background:pass?"#04140a":"#160606",border:`2px solid ${col}`,marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <p style={{fontSize:13,fontWeight:700,color:col,margin:0}}>⚡ Free scan · {tierTxt}</p>
+              <span style={{...mono,fontSize:11,color:col,fontWeight:700}}>{pass?"✓ WORTH A PAID SIGNAL":"✕ BELOW TIER 2 — SKIP"}</span>
+            </div>
+            <p style={{...mono,fontSize:11,color:"#94a3b8",margin:"6px 0 0",lineHeight:1.5}}>
+              1W {s.tW} · 1D {s.tD} · 4h {s.t4} · 1h {s.t1}{s.adx!=null?` · ADX ${s.adx.toFixed(0)}`:""}
+              {s.rangeFade?.active?` · ⇄ RANGE-FADE ${s.rangeFade.dir} bias`:""}
+            </p>
+            <p style={{fontSize:11,color:pass?"#86efac":"#fca5a5",...mono,margin:"6px 0 0",lineHeight:1.5}}>
+              {pass
+                ? "Hit “Refresh ↗ (paid)” to run the full AI signal — this setup cleared the tier gate."
+                : "Paid signal blocked to save your money — tier 0/1 is LOW/negative-expectancy. Re-scan (free) at the next 4h close (00/04/08/12/16/20 UTC) during a good session."}
+            </p>
+            <p style={{fontSize:9,color:"#475569",margin:"6px 0 0"}}>Computed locally from candles · €0 · no AI call. This is the same tier the paid signal would use.</p>
+          </div>
+        );
+      })()}
 
       {/* TD-missing warning (fix 2) */}
       {tdWarn&&!loading&&(

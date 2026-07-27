@@ -477,6 +477,23 @@ export const EST_COST_HIGH = 0.70; // € per paid signal — high estimate (mor
 export const bumpSignalCount = () => { try { const n = (parseInt(sessionStorage.getItem("sdg_calls")) || 0) + 1; sessionStorage.setItem("sdg_calls", String(n)); return n; } catch (_) { return 0; } };
 export const signalCount = () => { try { return parseInt(sessionStorage.getItem("sdg_calls")) || 0; } catch (_) { return 0; } };
 
+// ─── Daily cost / API-call meter (operational metering, NOT trade logging) ────
+// Persists a per-day count of paid Anthropic signals and Twelve-Data calls so the
+// user can see spend + free-tier headroom (TD free = 800/day). Self-resets when the
+// date rolls over. localStorage (same as keys/account/levels), never influences a
+// signal. TD_FREE_DAILY is the documented free-tier ceiling.
+export const TD_FREE_DAILY = 800;
+const dayKey = () => new Date().toISOString().slice(0, 10);
+export const dailyMeter = () => {
+  try { const d = JSON.parse(localStorage.getItem("sdg_daily") || "{}"); return (d.date === dayKey()) ? { date: d.date, paid: d.paid || 0, td: d.td || 0, scans: d.scans || 0 } : { date: dayKey(), paid: 0, td: 0, scans: 0 }; }
+  catch (_) { return { date: dayKey(), paid: 0, td: 0, scans: 0 }; }
+};
+export const bumpDaily = (field, n = 1) => {
+  const d = dailyMeter(); d[field] = (d[field] || 0) + n;
+  try { localStorage.setItem("sdg_daily", JSON.stringify(d)); } catch (_) {}
+  return d;
+};
+
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
 export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };

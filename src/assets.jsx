@@ -7,7 +7,7 @@ import {
   mono, card, lbl, fmt, p2, p5,
   calcMACD, calcRSI, calcATR, calcSMA, calcVWAP, calcVolRatio, calcEMAlast,
   getFxSession, getCryptoSession, getGbpSession,
-  f1, f2, f3, na, rsiLbl, rsiLblGold, volLbl, tdFetch, proxyDataUrl,
+  f1, f2, f3, na, rsiLbl, rsiLblGold, volLbl, tdFetch, proxyDataUrl, bumpDaily,
 } from "./shared";
 import { analyzeTimeframes, signalQuality, taPromptBlock } from "./ta";
 
@@ -18,6 +18,31 @@ const TA_ROWS = [
 ];
 
 const ff = v => (v||v===0) ? v.toFixed(5) : "n/a"; // forex 5-dp formatter
+
+// ─── FREE tier scan (no paid Anthropic call) ─────────────────────────────────
+// Fetches only the 3 candle series the higher-timeframe tier needs (1h/4h/1day)
+// and runs the SAME analyzeTimeframes() the paid signal uses, so the scanned tier
+// EXACTLY matches what the paid signal would compute. Zero AI cost — only ~3 free
+// data calls. Used by the free "Scan" button and as the hard tier-2 gate before any
+// paid signal. `fetchSeries(interval, size)` is the asset's own candle fetcher;
+// `rangeFadeEnabled` matches the asset (gold/GBP true, BTC false). Fails soft:
+// returns { ok:false } on any error so a data hiccup never hard-blocks the user.
+const runTierScan = async ({ fetchSeries, rangeFadeEnabled, cal, tdCalls = 0 }) => {
+  try {
+    const [c1h, c4h, c1d] = await Promise.all([fetchSeries("1h"), fetchSeries("4h"), fetchSeries("1day")]);
+    if (tdCalls) bumpDaily("td", tdCalls);
+    bumpDaily("scans", 1);
+    if (!c4h?.closes?.length || !c1h?.closes?.length) return { ok: false, reason: "no candles" };
+    const atr4h = calcATR(c4h.highs, c4h.lows, c4h.closes, 14);
+    const price = c4h.closes[c4h.closes.length - 1];
+    const ta = analyzeTimeframes({
+      c15: null, c1h, c4h, c1d, c4hTimes: c4h.times, price, atr4h,
+      prevClose: c1d && c1d.closes.length >= 2 ? c1d.closes[c1d.closes.length - 2] : null,
+      cal, rangeFadeEnabled,
+    });
+    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, price };
+  } catch (e) { return { ok: false, reason: e?.message || "scan failed" }; }
+};
 
 // ─── Small shared panel helpers (used inside extraPanels) ─────────────────────
 const Stat = ({ title, value, color="#e2e8f0", sub }) => (
@@ -69,6 +94,17 @@ const GOLD = {
     if(keys.td){ try{ const r=await fetch(proxyDataUrl("td", `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${keys.td}`)); const d=await r.json(); if(d.price>100) return {price:p2(d.price),src:"Twelve Data"}; }catch(_){} }
     try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"); if(r.ok){const d=await r.json();if(d?.["pax-gold"]?.usd>100) return {price:p2(d["pax-gold"].usd),src:"CoinGecko"};} }catch(_){}
     return null;
+  },
+  // FREE tier scan (no AI). Needs the Twelve Data key (same source as the signal).
+  scan: async (keys) => {
+    if(!keys.td) return { ok:false, reason:"Twelve Data key needed for the free tier scan" };
+    const fetchSeries = async (interval) => {
+      const d = await tdFetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=${interval==="1day"?210:100}&apikey=${keys.td}`);
+      if(d?.status==="error") throw new Error(d.message);
+      const v=(d?.values||[]).reverse();
+      return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
+    };
+    return runTierScan({ fetchSeries, rangeFadeEnabled:true, tdCalls:3 });
   },
   sessionsGuide:[
     { window:"08:00–10:00 UTC", label:"London Open — high volume, best signals", quality:"best" },
@@ -390,6 +426,17 @@ const GBP = {
     try{ const r=await fetch("https://open.er-api.com/v6/latest/GBP"); if(r.ok){const d=await r.json();if(d?.rates?.USD>0.5) return {price:p5(d.rates.USD),src:"open.er-api"};} }catch(_){}
     return null;
   },
+  // FREE tier scan (no AI). GBP uses its own calibrated ADX bars for the tier.
+  scan: async (keys) => {
+    if(!keys.td) return { ok:false, reason:"Twelve Data key needed for the free tier scan" };
+    const fetchSeries = async (interval) => {
+      const d = await tdFetch(`https://api.twelvedata.com/time_series?symbol=GBP/USD&interval=${interval}&outputsize=${interval==="1day"?210:100}&apikey=${keys.td}`);
+      if(d?.status==="error") throw new Error(d.message);
+      const v=(d?.values||[]).reverse();
+      return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
+    };
+    return runTierScan({ fetchSeries, rangeFadeEnabled:true, cal:{ adxWeak:18, adxStrong:22 }, tdCalls:3 });
+  },
   sessionsGuide:[
     { window:"07:00–09:00 UTC", label:"London Open — cable's primary liquidity window", quality:"best" },
     { window:"13:00–16:00 UTC", label:"London/NY Overlap — most reliable breakouts", quality:"best" },
@@ -661,6 +708,18 @@ const BTC = {
     try{ const r=await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"); if(r.ok){const d=await r.json();if(+d.price>1000) return {price:p2(d.price),src:"Binance"};} }catch(_){}
     try{ const r=await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"); if(r.ok){const d=await r.json();if(d?.bitcoin?.usd>1000) return {price:p2(d.bitcoin.usd),src:"CoinGecko"};} }catch(_){}
     return null;
+  },
+  // FREE tier scan (no AI). BTC uses Binance klines — no key, no TD-limit impact.
+  // rangeFadeEnabled:false — BTC did not clear the range-fade audit bar, stays untouched.
+  scan: async () => {
+    const fetchSeries = async (interval) => {
+      const iv = interval==="1day"?"1d":interval;
+      const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${iv}&limit=${iv==="1d"?210:100}`);
+      if(!r.ok) throw new Error(`Binance ${r.status}`);
+      const d = await r.json();
+      return { times:d.map(k=>k[0]), opens:d.map(k=>parseFloat(k[1])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), closes:d.map(k=>parseFloat(k[4])), volumes:d.map(k=>parseFloat(k[5])) };
+    };
+    return runTierScan({ fetchSeries, rangeFadeEnabled:false, tdCalls:0 });
   },
   sessionsGuide:[
     { window:"13:00–16:00 UTC", label:"EU-US Overlap — best breakouts", quality:"best" },
