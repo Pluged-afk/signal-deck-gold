@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, binaryWithin, hmLeft } from "./shared";
+import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, eventGate, hmLeft } from "./shared";
 import { ASSETS } from "./assets";
 
 // Recommended free-scan times — the 4h closes that land in a good session (skip the
@@ -59,8 +59,8 @@ export default function Landing({ onSelect }) {
     const keys = loadKeys();
     const ids = ["gold", "gbp", "btc"];
     const results = await Promise.all(ids.map(id => {
-      const be = binaryWithin(upcomingEvents(ASSETS[id].events || []), 24);
-      if (be) return Promise.resolve({ binaryBlocked: true, event: be });
+      const eg = eventGate(upcomingEvents(ASSETS[id].events || []), 24, 30);
+      if (eg) return Promise.resolve({ binaryBlocked: true, gate: eg });
       return ASSETS[id].scan ? ASSETS[id].scan(keys).catch(e => ({ ok: false, reason: e?.message })) : Promise.resolve({ ok: false, reason: "n/a" });
     }));
     const map = {}; ids.forEach((id, i) => map[id] = results[i]);
@@ -111,13 +111,13 @@ export default function Landing({ onSelect }) {
             <div style={{marginTop:10,borderTop:"1px solid #1e293b",paddingTop:10}}>
               {CARDS.map(c=>{
                 const s=scans[c.id]; if(!s) return null;
-                if(s.binaryBlocked){ const e=s.event;
+                if(s.binaryBlocked&&s.gate){ const g=s.gate, e=g.event, pre=g.phase==="pre", col=pre?"#f87171":"#fbbf24";
                   return (
                     <button key={c.id} onClick={()=>onSelect(c.id)}
-                      style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"8px 10px",margin:"4px 0",background:"#020617",border:"1px solid #f8717144",borderRadius:8,cursor:"pointer",...mono,textAlign:"left"}}>
+                      style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"8px 10px",margin:"4px 0",background:"#020617",border:`1px solid ${col}44`,borderRadius:8,cursor:"pointer",...mono,textAlign:"left"}}>
                       <span style={{fontSize:12,color:c.accentText,fontWeight:700,minWidth:70}}>{c.glyph} {c.name}</span>
-                      <span style={{fontSize:11,color:"#94a3b8",flex:1}}>⏳ {e.label} {e.ds} · {e.tEgy} EGY — within 24h</span>
-                      <span style={{fontSize:11,fontWeight:700,color:"#f87171",minWidth:130,textAlign:"right"}}>WAIT · in {hmLeft(e.date,+now)}</span>
+                      <span style={{fontSize:11,color:"#94a3b8",flex:1}}>{pre?"⏳":"⚠️"} {e.label} {e.ds} · {e.tEgy} EGY {pre?"— within 24h":"— just released"}</span>
+                      <span style={{fontSize:11,fontWeight:700,color:col,minWidth:135,textAlign:"right"}}>{pre?`WAIT · release ${hmLeft(g.at,+now)}`:`safe in ${hmLeft(g.safeAt,+now)}`}</span>
                     </button>
                   );
                 }

@@ -264,6 +264,20 @@ export const binaryWithin = (events, hours = 24) => {
     .filter(e => e && e.date && (+e.date - now) > 0 && (+e.date - now) <= hours * 3600000)
     .sort((a, b) => +a.date - +b.date)[0] || null;   // the NEAREST imminent event
 };
+// Two-phase event gate: "pre" = within preH hours BEFORE the release (block/WAIT);
+// "chaos" = within postMin minutes AFTER release (still WAIT — the sharp, whippy
+// window verified to blow stops); null = safe to trade. `at` = release time,
+// `safeAt` = when it becomes tradeable again. Feed a ticking clock for a live count.
+export const eventGate = (events, preH = 24, postMin = 30) => {
+  const now = Date.now();
+  const sorted = (events || []).filter(e => e && e.date).sort((a, b) => +a.date - +b.date);
+  for (const e of sorted) {
+    const dt = +e.date, delta = dt - now, safeAt = dt + postMin * 60000;
+    if (delta > 0 && delta <= preH * 3600000) return { phase: "pre", event: e, at: dt, safeAt };
+    if (delta <= 0 && now < safeAt) return { phase: "chaos", event: e, at: dt, safeAt };
+  }
+  return null;
+};
 // "Xh Ym" (or "Ym") until a target time — a live countdown when fed a ticking clock.
 export const hmLeft = (target, nowMs = Date.now()) => {
   const ms = Math.max(0, (+target) - nowMs), h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);

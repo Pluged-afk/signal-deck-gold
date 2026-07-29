@@ -6,7 +6,7 @@ import {
   loadKeys, saveKeys, WAIT_RULES, ACCURACY_RULES, PERMANENT_FOOTER, egyptWindow, urgencyCol, inWindow,
   bumpSignalCount, signalCount, EST_COST, EST_COST_HIGH,
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
-  dailyMeter, bumpDaily, TD_FREE_DAILY, binaryWithin, hmLeft,
+  dailyMeter, bumpDaily, TD_FREE_DAILY, eventGate, hmLeft,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -168,8 +168,8 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   // free-limit calls) — the signal would be a mandatory WAIT anyway.
   const scanOnly = useCallback(async () => {
     if(!config.scan) return;
-    const be = binaryWithin(events, 24);
-    if(be){ setScanResult({ binaryBlocked:true, event:be, ts:Date.now() }); setPrecheck(null); return; }
+    const eg = eventGate(events, 24, 30);
+    if(eg){ setScanResult({ binaryBlocked:true, gate:eg, ts:Date.now() }); setPrecheck(null); return; }
     setScanning(true); setError(null); setPrecheck(null);
     const scan = await config.scan(keys).catch(e=>({ok:false,reason:e?.message}));
     setScanResult({ ...scan, ts:Date.now() });
@@ -187,8 +187,8 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     // skip the scan AND the paid call — both would be a mandatory WAIT. Saves the TD
     // free-limit calls and the €0.18-0.70. Verified worth respecting: FOMC/NFP candles
     // move ~1.7-2.6x normal and blow a 1.5xATR stop 57-73% of the time, direction ~50/50.
-    const be = binaryWithin(events, 24);
-    if(be){ setScanResult({ binaryBlocked:true, event:be, ts:Date.now() }); setPrecheck(null); addLog(`Binary event (${be.label}) within 24h — scan + paid signal blocked (would WAIT).`); return; }
+    const eg = eventGate(events, 24, 30);
+    if(eg){ setScanResult({ binaryBlocked:true, gate:eg, ts:Date.now() }); setPrecheck(null); addLog(`Binary event (${eg.event.label}) — ${eg.phase==="pre"?"within 24h":"post-release chaos window"} — scan + paid signal blocked (WAIT).`); return; }
     setPrechecking(true); setError(null);
     // HARD TIER GATE (free): compute the higher-timeframe tier locally with no AI
     // call and BLOCK the paid signal below tier 2 — the user's cost-protection
@@ -299,16 +299,22 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       {/* FREE SCAN result + tier gate verdict (no AI cost) */}
       {scanResult&&!loading&&(()=>{
         const s=scanResult;
-        // Binary-event block: no scan ran (saved the TD calls), no paid call. Live
-        // countdown to the release; re-scan is pointless until it clears + ~30 min.
-        if(s.binaryBlocked){ const e=s.event; const over=+e.date+30*60000; const done=now>=(+e.date);
+        // Binary-event block: no scan ran (saved the TD calls), no paid call. Two-phase
+        // live timer — countdown to release, then countdown to when it's SAFE to trade.
+        if(s.binaryBlocked&&s.gate){ const g=s.gate, e=g.event, pre=g.phase==="pre";
           return (
-            <div style={{...card,background:"#160606",border:"2px solid #f87171",marginBottom:10}}>
-              <p style={{fontSize:13,fontWeight:700,color:"#f87171",margin:"0 0 4px"}}>⏳ Binary event — scan &amp; signal blocked</p>
-              <p style={{fontSize:11,color:"#fca5a5",...mono,margin:0,lineHeight:1.55}}>
-                <b>{e.label}</b> {e.ds} · {e.tEgy} EGY is within 24h — both the free scan and a paid signal would be a mandatory WAIT, so nothing was fetched (no TD calls, no €).
-                <br/>{done?`Released — wait until ~${hmLeft(over,+now)} more (30-min chaos window), then scan again.`:`Countdown to release: ${hmLeft(e.date,+now)} · then re-scan ~30 min after.`}
-                <br/><span style={{color:"#94a3b8"}}>Why WAIT is real: FOMC/NFP candles move ~1.7–2.6× normal and blow a 1.5×ATR stop 57–73% of the time, direction ~50/50 — a coin flip at 2.5× the risk.</span>
+            <div style={{...card,background:pre?"#160606":"#1a1206",border:`2px solid ${pre?"#f87171":"#fbbf24"}`,marginBottom:10}}>
+              <p style={{fontSize:13,fontWeight:700,color:pre?"#f87171":"#fbbf24",margin:"0 0 4px"}}>
+                {pre?"⏳ Binary event — scan & signal blocked":"⚠️ Post-event chaos window — still WAIT"}
+              </p>
+              <p style={{fontSize:11,color:pre?"#fca5a5":"#fde68a",...mono,margin:0,lineHeight:1.6}}>
+                <b>{e.label}</b> {e.ds} · {e.tEgy} EGY.
+                {pre
+                  ? <> Within 24h — both the free scan and a paid signal would be a mandatory WAIT, so nothing was fetched (no TD calls, no €).</>
+                  : <> Just released — the first 30 min is the sharp, whippy window that blows stops.</>}
+                <br/><b style={{color:pre?"#f87171":"#fbbf24"}}>{pre?`⏱ Release in ${hmLeft(g.at,+now)}`:`⏱ Safe to trade in ${hmLeft(g.safeAt,+now)}`}</b>
+                {pre?<span style={{color:"#64748b"}}> · then safe to trade ~{hmLeft(g.safeAt,+now)} from now</span>:<span style={{color:"#64748b"}}> — then scan for the post-event trend</span>}
+                <br/><span style={{color:"#94a3b8"}}>Why: FOMC/NFP candles move ~1.7–2.6× normal and blow a 1.5×ATR stop 57–73% of the time, direction ~50/50 — a coin flip at 2.5× the risk.</span>
               </p>
             </div>
           );
