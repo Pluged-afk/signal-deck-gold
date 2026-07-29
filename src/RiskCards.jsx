@@ -74,6 +74,21 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
   const riskDist = Math.abs(entry - stop);
   if (!riskDist) return null;
   const riskEur = acct * riskPct / 100;
+
+  // ── POSITION SIZE (Pepperstone contract specs) ──────────────────────────────
+  // The number pros compute BEFORE every trade and retail skips: the exact lot size
+  // that makes the loss-at-stop equal your chosen risk %. contractVal = USD P/L per
+  // 1.0 price unit per 1.0 lot. lots = riskAmount / (stopDistance × contractVal).
+  const SPEC = { gold: { cv: 100, unit: "oz", perLot: 100 }, gbp: { cv: 100000, unit: "units", perLot: 100000 }, btc: { cv: 1, unit: "BTC", perLot: 1 } }[assetId] || { cv: 1, unit: "units", perLot: 1 };
+  const rawLots = riskEur / (riskDist * SPEC.cv);      // treats risk amount ≈ quote-ccy (USD) for sizing
+  // Round DOWN to the 0.01-lot broker increment — rounding to nearest can over-risk
+  // (e.g. 0.0154 → 0.02 risks 30% more than chosen). Under-risking is always safe.
+  const lots = Math.floor(rawLots * 100) / 100;
+  const units = lots * SPEC.perLot;
+  const actualRisk = lots * riskDist * SPEC.cv;        // what that rounded lot size ACTUALLY risks
+  const actualPct = acct > 0 ? actualRisk / acct * 100 : 0;
+  const tooSmall = rawLots > 0 && lots < 0.01;         // account too small / stop too wide for this risk%
+  const highRisk = riskPct > 2;
   const fp = v => v == null ? "—" : `${pricePrefix}${Number(v).toFixed(decimals)}`;
   const eur = v => (v >= 0 ? "+" : "−") + "€" + Math.abs(v).toFixed(0);
   const pct = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2) + "%";
@@ -101,6 +116,20 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
           <label style={{ fontSize: 9, color: "#475569" }}>Risk %<input type="number" value={riskPct} min={0} step={0.5} onChange={e => setR(parseFloat(e.target.value) || 0)} style={{ ...inp, width: 52, marginLeft: 4 }} /></label>
         </div>
       </div>
+      {/* Position size — the number to actually enter, so every trade risks the same % */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 10px", marginBottom: 8, borderRadius: 8, background: "#04140a", border: "1px solid #166534", flexWrap: "wrap" }}>
+        <div>
+          <p style={{ fontSize: 10, color: "#4ade80", margin: "0 0 2px", letterSpacing: "0.05em", textTransform: "uppercase" }}>Position size — enter this</p>
+          <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: 0 }}>target {riskPct}% of €{Number(acct).toLocaleString()} · stop {riskDist.toFixed(decimals)}{assetId === "gbp" ? ` (${Math.round(riskDist * 10000)} pips)` : ""}{!tooSmall ? ` · actually risks €${actualRisk.toFixed(0)} (${actualPct.toFixed(2)}%)` : ""}</p>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: tooSmall ? "#f87171" : "#4ade80", margin: 0 }}>{tooSmall ? "< 0.01 lot" : `${lots.toFixed(2)} lots`}</p>
+          {!tooSmall && <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: "2px 0 0" }}>= {units.toLocaleString(undefined, { maximumFractionDigits: SPEC.unit === "BTC" ? 3 : 0 })} {SPEC.unit}</p>}
+        </div>
+      </div>
+      {tooSmall && <p style={{ fontSize: 10, color: "#fca5a5", ...mono, margin: "-4px 0 8px", lineHeight: 1.5 }}>⚠ Your {riskPct}% risk (€{riskEur.toFixed(0)}) is below the 0.01-lot minimum for this stop distance. Either widen the account, raise risk% (carefully), or skip — do NOT force an oversized 0.01 lot, it would risk more than {riskPct}%.</p>}
+      {highRisk && !tooSmall && <p style={{ fontSize: 10, color: "#fbbf24", ...mono, margin: "-4px 0 8px", lineHeight: 1.5 }}>⚠ {riskPct}% per trade is aggressive — a normal losing streak (6-8 in a row happens) would cut the account hard. Pros risk 1-2%.</p>}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 84px 70px 66px", gap: 6, alignItems: "center", fontSize: 10, color: "#475569", paddingBottom: 4, borderBottom: "1px solid #1e293b" }}>
         <span>OUTCOME</span><span style={{ textAlign: "right" }}>PRICE</span><span style={{ textAlign: "right" }}>€ (P/L)</span><span style={{ textAlign: "right" }}>% ACCT</span>
       </div>
@@ -117,8 +146,7 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
         <span style={{ ...mono, fontSize: 12, color: "#fbbf24" }}>{fp(beTrigger)}</span>
       </div>
       <p style={{ fontSize: 9, color: "#475569", margin: "8px 0 0", lineHeight: 1.5 }}>
-        Time decay: if no clear move develops, close by session end rather than holding a stalling position.
-        {assetId === "gbp" ? ` GBP/USD: 1 pip ≈ $0.10 (≈€0.09) at 0.01 lots — € below assumes ${riskPct}% risk on €${Number(acct).toLocaleString()}; confirm your exact €/pip with Pepperstone.` : ` € assumes ${riskPct}% risk on a €${Number(acct).toLocaleString()} account; scale with your size.`}
+        Lot size uses Pepperstone contract specs ({assetId === "gold" ? "1 lot = 100 oz" : assetId === "gbp" ? "1 lot = 100k, 1 pip = $10" : assetId === "btc" ? "1 lot = 1 BTC" : "standard"}) and assumes ≈1:1 €/$ — a € account risks ~8% more in $ terms, so confirm the exact lot in your broker's calculator before entering. Time decay: if no clear move develops, close by session end rather than holding a stalling position.
       </p>
     </div>
   );
