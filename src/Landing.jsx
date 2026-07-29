@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, eventGate, hmLeft } from "./shared";
+import { fetchLiveCalendar, upcomingLive } from "./calendar";
 import { ASSETS } from "./assets";
 
 // Recommended free-scan times — the 4h closes that land in a good session (skip the
@@ -54,14 +55,20 @@ export default function Landing({ onSelect }) {
 
   // Scan all three at once (FREE — no AI). Skips any asset with a binary event inside
   // the 24h WAIT window — no fetch, no wasted TD-limit call, since it would WAIT anyway.
+  // Uses the LIVE calendar (same source as the per-asset scan) so real dated events
+  // (e.g. GDP Jul 30) are caught; the local approximate calendar is only a fallback if
+  // the live feed is unavailable — it estimates CPI/PCE/GDP dates and would miss them.
   const scanAll = async () => {
     setScanning(true);
     const keys = loadKeys();
+    const all = await fetchLiveCalendar().catch(() => null);
     const ids = ["gold", "gbp", "btc"];
     const results = await Promise.all(ids.map(id => {
-      const eg = eventGate(upcomingEvents(ASSETS[id].events || []), 24, 30);
+      const cfg = ASSETS[id];
+      const evs = all ? upcomingLive(all, cfg.eventCurrencies || ["USD"]) : upcomingEvents(cfg.events || []);
+      const eg = eventGate(evs, 24, 30);
       if (eg) return Promise.resolve({ binaryBlocked: true, gate: eg });
-      return ASSETS[id].scan ? ASSETS[id].scan(keys).catch(e => ({ ok: false, reason: e?.message })) : Promise.resolve({ ok: false, reason: "n/a" });
+      return cfg.scan ? cfg.scan(keys).catch(e => ({ ok: false, reason: e?.message })) : Promise.resolve({ ok: false, reason: "n/a" });
     }));
     const map = {}; ids.forEach((id, i) => map[id] = results[i]);
     setScans(map); setScanTs(new Date()); setScanning(false);
