@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter } from "./shared";
+import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, binaryWithin, hmLeft } from "./shared";
 import { ASSETS } from "./assets";
 
 // Recommended free-scan times — the 4h closes that land in a good session (skip the
@@ -52,12 +52,17 @@ export default function Landing({ onSelect }) {
   const [scanTs, setScanTs] = useState(null);
   const meter = dailyMeter();
 
-  // Scan all three at once (FREE — no AI). Each config.scan bumps the daily meter.
+  // Scan all three at once (FREE — no AI). Skips any asset with a binary event inside
+  // the 24h WAIT window — no fetch, no wasted TD-limit call, since it would WAIT anyway.
   const scanAll = async () => {
     setScanning(true);
     const keys = loadKeys();
     const ids = ["gold", "gbp", "btc"];
-    const results = await Promise.all(ids.map(id => ASSETS[id].scan ? ASSETS[id].scan(keys).catch(e => ({ ok: false, reason: e?.message })) : Promise.resolve({ ok: false, reason: "n/a" })));
+    const results = await Promise.all(ids.map(id => {
+      const be = binaryWithin(upcomingEvents(ASSETS[id].events || []), 24);
+      if (be) return Promise.resolve({ binaryBlocked: true, event: be });
+      return ASSETS[id].scan ? ASSETS[id].scan(keys).catch(e => ({ ok: false, reason: e?.message })) : Promise.resolve({ ok: false, reason: "n/a" });
+    }));
     const map = {}; ids.forEach((id, i) => map[id] = results[i]);
     setScans(map); setScanTs(new Date()); setScanning(false);
   };
@@ -106,6 +111,16 @@ export default function Landing({ onSelect }) {
             <div style={{marginTop:10,borderTop:"1px solid #1e293b",paddingTop:10}}>
               {CARDS.map(c=>{
                 const s=scans[c.id]; if(!s) return null;
+                if(s.binaryBlocked){ const e=s.event;
+                  return (
+                    <button key={c.id} onClick={()=>onSelect(c.id)}
+                      style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"8px 10px",margin:"4px 0",background:"#020617",border:"1px solid #f8717144",borderRadius:8,cursor:"pointer",...mono,textAlign:"left"}}>
+                      <span style={{fontSize:12,color:c.accentText,fontWeight:700,minWidth:70}}>{c.glyph} {c.name}</span>
+                      <span style={{fontSize:11,color:"#94a3b8",flex:1}}>⏳ {e.label} {e.ds} · {e.tEgy} EGY — within 24h</span>
+                      <span style={{fontSize:11,fontWeight:700,color:"#f87171",minWidth:130,textAlign:"right"}}>WAIT · in {hmLeft(e.date,+now)}</span>
+                    </button>
+                  );
+                }
                 const fade=s.ok&&(s.rangeFade?.active||s.revFade?.active);
                 const fadeDir=s.rangeFade?.active?s.rangeFade.dir:s.revFade?.active?s.revFade.dir:null;
                 const pass=s.ok&&(s.tier>=2||fade);

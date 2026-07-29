@@ -255,6 +255,21 @@ export const egyptWindow = win => { const m = (win || "").match(/(\d{1,2}):(\d{2
 // Binary-event urgency: red <3d, orange <7d, amber beyond.
 export const urgencyCol = d => d == null ? "#475569" : d < 3 ? "#f87171" : d < 7 ? "#fb923c" : "#fbbf24";
 
+// First binary event within `hours` from now (the WAIT window), else null. Used to
+// block BOTH the free scan and the paid signal — a scan is pointless (and wastes the
+// Twelve-Data free limit) when an imminent event will force WAIT anyway.
+export const binaryWithin = (events, hours = 24) => {
+  const now = Date.now();
+  return (events || [])
+    .filter(e => e && e.date && (+e.date - now) > 0 && (+e.date - now) <= hours * 3600000)
+    .sort((a, b) => +a.date - +b.date)[0] || null;   // the NEAREST imminent event
+};
+// "Xh Ym" (or "Ym") until a target time — a live countdown when fed a ticking clock.
+export const hmLeft = (target, nowMs = Date.now()) => {
+  const ms = Math.max(0, (+target) - nowMs), h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+};
+
 // Is the current UTC time inside a "HH:MM–HH:MM UTC" window? (handles midnight wrap)
 export const inWindow = win => {
   const m = (win || "").match(/(\d{1,2}):(\d{2}).*?(\d{1,2}):(\d{2})/); if (!m) return false;

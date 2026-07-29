@@ -6,7 +6,7 @@ import {
   loadKeys, saveKeys, WAIT_RULES, ACCURACY_RULES, PERMANENT_FOOTER, egyptWindow, urgencyCol, inWindow,
   bumpSignalCount, signalCount, EST_COST, EST_COST_HIGH,
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
-  dailyMeter, bumpDaily, TD_FREE_DAILY,
+  dailyMeter, bumpDaily, TD_FREE_DAILY, binaryWithin, hmLeft,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -163,15 +163,19 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   }, [keys, config, postNfp.active, nfpAsset, events, refresh]);
 
   // FREE standalone tier scan — no paid call, no interval gate. Lets the user check
-  // "is this worth paying for?" as often as they like for €0.
+  // "is this worth paying for?" as often as they like for €0. BUT if a binary event
+  // is inside the 24h WAIT window, skip the scan entirely (don't even spend the TD
+  // free-limit calls) — the signal would be a mandatory WAIT anyway.
   const scanOnly = useCallback(async () => {
     if(!config.scan) return;
+    const be = binaryWithin(events, 24);
+    if(be){ setScanResult({ binaryBlocked:true, event:be, ts:Date.now() }); setPrecheck(null); return; }
     setScanning(true); setError(null); setPrecheck(null);
     const scan = await config.scan(keys).catch(e=>({ok:false,reason:e?.message}));
     setScanResult({ ...scan, ts:Date.now() });
     setMeter(dailyMeter());
     setScanning(false);
-  }, [keys, config]);
+  }, [keys, config, events]);
 
   // Free local pre-check first; only call the paid signal if all conditions pass.
   const attemptSignal = useCallback(async (opts={}) => {
@@ -179,6 +183,12 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     // Fix 2: warn before spending if Twelve Data key is missing on a TD-backed asset
     if(usesTD && !keys.td && !opts.ackTD){ setTdWarn(true); setPrecheck(null); return; }
     setTdWarn(false);
+    // BINARY-EVENT BLOCK (free, first): if an event is inside the 24h WAIT window,
+    // skip the scan AND the paid call — both would be a mandatory WAIT. Saves the TD
+    // free-limit calls and the €0.18-0.70. Verified worth respecting: FOMC/NFP candles
+    // move ~1.7-2.6x normal and blow a 1.5xATR stop 57-73% of the time, direction ~50/50.
+    const be = binaryWithin(events, 24);
+    if(be){ setScanResult({ binaryBlocked:true, event:be, ts:Date.now() }); setPrecheck(null); addLog(`Binary event (${be.label}) within 24h — scan + paid signal blocked (would WAIT).`); return; }
     setPrechecking(true); setError(null);
     // HARD TIER GATE (free): compute the higher-timeframe tier locally with no AI
     // call and BLOCK the paid signal below tier 2 — the user's cost-protection
@@ -289,6 +299,20 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       {/* FREE SCAN result + tier gate verdict (no AI cost) */}
       {scanResult&&!loading&&(()=>{
         const s=scanResult;
+        // Binary-event block: no scan ran (saved the TD calls), no paid call. Live
+        // countdown to the release; re-scan is pointless until it clears + ~30 min.
+        if(s.binaryBlocked){ const e=s.event; const over=+e.date+30*60000; const done=now>=(+e.date);
+          return (
+            <div style={{...card,background:"#160606",border:"2px solid #f87171",marginBottom:10}}>
+              <p style={{fontSize:13,fontWeight:700,color:"#f87171",margin:"0 0 4px"}}>⏳ Binary event — scan &amp; signal blocked</p>
+              <p style={{fontSize:11,color:"#fca5a5",...mono,margin:0,lineHeight:1.55}}>
+                <b>{e.label}</b> {e.ds} · {e.tEgy} EGY is within 24h — both the free scan and a paid signal would be a mandatory WAIT, so nothing was fetched (no TD calls, no €).
+                <br/>{done?`Released — wait until ~${hmLeft(over,+now)} more (30-min chaos window), then scan again.`:`Countdown to release: ${hmLeft(e.date,+now)} · then re-scan ~30 min after.`}
+                <br/><span style={{color:"#94a3b8"}}>Why WAIT is real: FOMC/NFP candles move ~1.7–2.6× normal and blow a 1.5×ATR stop 57–73% of the time, direction ~50/50 — a coin flip at 2.5× the risk.</span>
+              </p>
+            </div>
+          );
+        }
         if(!s.ok) return (
           <div style={{...card,background:"#1a1206",border:"1px solid #a16207",marginBottom:10}}>
             <p style={{fontSize:12,fontWeight:700,color:"#fbbf24",margin:"0 0 3px"}}>⚡ Free scan — couldn't compute the tier</p>
