@@ -40,7 +40,7 @@ const runTierScan = async ({ fetchSeries, rangeFadeEnabled, revFadeEnabled, cal,
       prevClose: c1d && c1d.closes.length >= 2 ? c1d.closes[c1d.closes.length - 2] : null,
       cal, rangeFadeEnabled, revFadeEnabled,
     });
-    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, revFade: ta.revFade, price };
+    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, revFade: ta.revFade, extended: ta.extended, ranging: ta.ranging, recentMoveATR: ta.recentMoveATR, price };
   } catch (e) { return { ok: false, reason: e?.message || "scan failed" }; }
 };
 

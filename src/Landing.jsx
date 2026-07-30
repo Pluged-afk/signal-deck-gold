@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, eventGate, hmLeft } from "./shared";
+import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, eventGate, hmLeft, saveScans, loadScans, next4hBoundaryMs } from "./shared";
 import { fetchLiveCalendar, upcomingLive } from "./calendar";
 import { ASSETS } from "./assets";
 
@@ -48,9 +48,12 @@ const ratingCol = r => r==="good"?"#4ade80":r==="fair"?"#fbbf24":"#f87171";
 export default function Landing({ onSelect }) {
   const wknd = isWeekend();
   const now = useNow(1000);
-  const [scans, setScans] = useState(null);      // { gold:{ok,tier,...}, gbp:{...}, btc:{...} }
+  // Hydrate from the cached Scan All so the per-asset quality is visible on every page
+  // load (the tier is stable within a 4h bar) — not blank until you re-scan.
+  const _cachedScans = loadScans();
+  const [scans, setScans] = useState(_cachedScans?.map || null);   // { gold:{ok,tier,...}, gbp:{...}, btc:{...} }
   const [scanning, setScanning] = useState(false);
-  const [scanTs, setScanTs] = useState(null);
+  const [scanTs, setScanTs] = useState(_cachedScans?.ts ? new Date(_cachedScans.ts) : null);
   const [liveCal, setLiveCal] = useState(true);  // did the last scan reach the live calendar?
   const [autoScan, setAutoScan] = useState(() => { try { return localStorage.getItem("sdg_autoscan") === "1"; } catch (_) { return false; } });
   const lastSlotRef = useRef(-1);   // last 4h slot auto-scanned (dedupe)
@@ -94,10 +97,11 @@ export default function Landing({ onSelect }) {
     }
     // Notify (auto-scans only) when something is actually tradeable — tier 2+ or a fade.
     if (opts.auto && canNotify) {
-      const good = ids.filter(id => { const s = map[id]; return s.ok && (s.tier >= 2 || s.rangeFade?.active || s.revFade?.active); });
+      const good = ids.filter(id => { const s = map[id]; return s.ok && !s.extended && (s.tier >= 2 || s.rangeFade?.active || s.revFade?.active); });
       if (good.length) try { new Notification("Signal Deck — worth a look", { body: good.map(id => `${id.toUpperCase()}: ${map[id].revFade?.active || map[id].rangeFade?.active ? "FADE setup" : "tier " + map[id].tier}`).join(" · ") }); } catch (_) {}
     }
-    setScans(map); setScanTs(new Date()); setScanning(false); scanningRef.current = false;
+    const ts = Date.now();
+    setScans(map); setScanTs(new Date(ts)); saveScans(map, ts); setScanning(false); scanningRef.current = false;
   };
 
   const toggleAuto = () => {
@@ -195,24 +199,27 @@ export default function Landing({ onSelect }) {
                 }
                 const fade=s.ok&&(s.rangeFade?.active||s.revFade?.active);
                 const fadeDir=s.rangeFade?.active?s.rangeFade.dir:s.revFade?.active?s.revFade.dir:null;
-                const pass=s.ok&&(s.tier>=2||fade);
-                const col=!s.ok?"#fbbf24":fade?"#c084fc":pass?"#4ade80":"#f87171";
+                const ext=s.ok&&s.extended;                 // ran >1.5×ATR — don't chase
+                const tierPass=s.ok&&(s.tier>=2||fade);
+                const pass=tierPass&&!ext;                  // tradeable now only if NOT extended
+                const col=!s.ok?"#fbbf24":ext?"#fb923c":fade?"#c084fc":tierPass?"#4ade80":"#f87171";
                 return (
                   <button key={c.id} onClick={()=>onSelect(c.id)}
                     style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"8px 10px",margin:"4px 0",background:"#020617",border:`1px solid ${col}44`,borderRadius:8,cursor:"pointer",...mono,textAlign:"left"}}>
                     <span style={{fontSize:12,color:c.accentText,fontWeight:700,minWidth:70}}>{c.glyph} {c.name}</span>
                     <span style={{fontSize:11,color:"#94a3b8",flex:1}}>
-                      {s.ok?`1D ${s.tD} · 4h ${s.t4} · 1h ${s.t1}${fade?` · ⇄ ${fadeDir} fade`:""}`:`scan failed — ${s.reason||"n/a"}`}
+                      {s.ok?`1D ${s.tD} · 4h ${s.t4} · 1h ${s.t1}${s.ranging?" · RANGE":""}${ext?` · ⚠ ran ${s.recentMoveATR?.toFixed(1)}×ATR`:""}${fade?` · ⇄ ${fadeDir} fade`:""}`:`scan failed — ${s.reason||"n/a"}`}
                     </span>
-                    <span style={{fontSize:11,fontWeight:700,color:col,minWidth:130,textAlign:"right"}}>
-                      {!s.ok?"— proceed manually":fade?`⇄ FADE ✓ WORTH IT`:pass?`tier ${s.tier} ✓ WORTH IT`:`tier ${s.tier} ✕ skip`}
+                    <span style={{fontSize:11,fontWeight:700,color:col,minWidth:135,textAlign:"right"}}>
+                      {!s.ok?"— proceed manually":ext?`tier ${s.tier} · wait pullback`:fade?`⇄ FADE ✓ WORTH IT`:pass?`tier ${s.tier} ✓ WORTH IT`:`tier ${s.tier} ✕ skip`}
                     </span>
                   </button>
                 );
               })}
-              <p style={{fontSize:9,color:"#475569",margin:"6px 0 0",textAlign:"right"}}>
-                Scanned {scanTs?scanTs.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):""} · today: {meter.scans} scans · {meter.paid} paid{meter.td?` · ~${meter.td}/${TD_FREE_DAILY} TD`:""}
-              </p>
+              {(()=>{const stale=scanTs&&(+scanTs < next4hBoundaryMs(+now)-4*3600000);return(
+              <p style={{fontSize:9,color:stale?"#fb923c":"#475569",margin:"6px 0 0",textAlign:"right"}}>
+                {stale?"⚠ from a previous 4h candle — re-scan to refresh · ":""}Scanned {scanTs?scanTs.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):""} · today: {meter.scans} scans · {meter.paid} paid{meter.td?` · ~${meter.td}/${TD_FREE_DAILY} TD`:""}
+              </p>);})()}
             </div>
           )}
 

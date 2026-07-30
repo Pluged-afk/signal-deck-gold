@@ -7,12 +7,13 @@ import {
   bumpSignalCount, signalCount, EST_COST, EST_COST_HIGH,
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
   dailyMeter, bumpDaily, TD_FREE_DAILY, eventGate, hmLeft,
+  lockSignal, signalLock, addTrade, getTrades, updateTrade, journalStats,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
 import { MarginalBanner, ScenarioMap, OutcomeMap, TradePlan } from "./RiskCards";
 import { runPreCheck, storeSignalForPrecheck, PrecheckCard, BinaryBlockCard, precheckSummary } from "./precheck";
-import { localWait } from "./ta";
+import { localWait, tradeVerdict } from "./ta";
 import { useLiveEvents, EventStrip, computeMarginal, upcomingLive } from "./calendar";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
@@ -119,6 +120,15 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
             parsed._htfTier = ta.htfTier;
             if(ta.htfTier === 0){ parsed.confidence = "LOW"; parsed._lowConfWarn = true; caps.push(`tier 0 — daily does not confirm`); addLog(`HTF tier 0 — daily (${ta.tD}) does not confirm 4h ${ta.t4} — capping confidence at LOW`); }
             else if(ta.htfTier < 3 && parsed.confidence === "HIGH"){ parsed.confidence = "MEDIUM"; caps.push(`tier ${ta.htfTier}/3`); addLog(`HTF tier ${ta.htfTier}/3 (daily confirms, ${3 - ta.htfTier} of 1h/weekly do not) — capping confidence at MEDIUM`); }
+          } else if(parsed.action !== "WAIT"){
+            // NO-TIER LOCKDOWN (2026-07-30): the tier couldn't be computed (daily
+            // candles unavailable / rate-limited). The single strongest filter is
+            // MISSING — never ship a confident directional signal blind. Cap at LOW
+            // and flag it loudly so the card shows the gate was absent.
+            parsed._tierMissing = true; parsed._lowConfWarn = true;
+            if(["MEDIUM","HIGH","VERY HIGH"].includes(String(parsed.confidence).toUpperCase())) parsed.confidence = "LOW";
+            caps.push(`tier unavailable — strongest filter missing`);
+            addLog(`HTF tier UNAVAILABLE (no daily candles) — signal issued WITHOUT its strongest filter; capping at LOW.`);
           }
           // If nothing here overrode the model, the label is its own judgement — say so
           // rather than leaving the user to guess which rule fired.
@@ -155,8 +165,12 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       }
 
       parsed._marginal = computeMarginal(ta, evNow, Date.now());
+      // Central TRADE / NO-TRADE / WAIT verdict (profit-first gate — the strongest
+      // predictors only: tier ≥2, no live event, not extended, confidence ≥ MEDIUM).
+      try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30) }); }catch(_){}
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
+      lockSignal(config.id); // behavioural lockout: no re-scan until the next 4h close
       try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally{ setLoading(false); }
@@ -248,7 +262,9 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {ts&&<span style={{...mono,fontSize:11,color:"#475569"}}>{ts.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>}
           {keysSet&&config.scan&&<button onClick={scanOnly} disabled={loading||prechecking||scanning} style={ghostBtn} title="Free tier scan — no API cost. Checks if a setup is worth a paid signal.">{scanning?"Scanning…":"⚡ Scan (free)"}</button>}
-          {keysSet&&<button onClick={attemptSignal} disabled={loading||prechecking||scanning} style={primaryBtn}>{prechecking?"Checking...":loading?"Scanning...":"Refresh ↗ (paid)"}</button>}
+          {keysSet&&(()=>{const lk=signalLock(config.id,+now);const busy=loading||prechecking||scanning;return(
+            <button onClick={attemptSignal} disabled={busy||lk.locked} style={{...primaryBtn,...(lk.locked?{opacity:0.5,cursor:"not-allowed"}:{})}} title={lk.locked?`Locked until the next 4h close (${hmLeft(lk.until,+now)}). A mid-bar re-scan returns the same read (win-rate is flat across the bar) — this friction blocks refresh-hunting and revenge re-entry. Free scan still works.`:"Run the paid AI signal"}>{prechecking?"Checking...":loading?"Scanning...":lk.locked?`🔒 ${hmLeft(lk.until,+now)}`:"Refresh ↗ (paid)"}</button>
+          );})()}
           <button onClick={()=>setKeysSet(false)} style={ghostBtn}>⚙ Keys</button>
         </div>
       </div>
@@ -449,6 +465,20 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           </div>
         )}
 
+        {/* VERDICT — profit-first gate. The single most important line on the card:
+            should you trade this at all? TRADE only clears on the proven filters
+            (tier ≥2, no live event, not extended, confidence ≥ MEDIUM). */}
+        {sig._verdict&&(()=>{const v=sig._verdict;const meta={TRADE:{bg:"#052e16",bd:"#16a34a",fg:"#4ade80",ic:"✅"},WAIT:{bg:"#1f1206",bd:"#ea580c",fg:"#fb923c",ic:"⏸"},"NO-TRADE":{bg:"#1a0a0a",bd:"#b91c1c",fg:"#f87171",ic:"⛔"}}[v.verdict]||{bg:"#0f172a",bd:"#334155",fg:"#94a3b8",ic:"•"};return(
+          <div style={{...card,background:meta.bg,border:`2px solid ${meta.bd}`,marginBottom:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <span style={{...mono,fontSize:18,fontWeight:800,color:meta.fg,letterSpacing:"0.08em"}}>{meta.ic} {v.verdict}</span>
+              <span style={{fontSize:12,fontWeight:600,color:meta.fg}}>{v.headline}</span>
+            </div>
+            <p style={{fontSize:11,color:"#cbd5e1",...mono,margin:"6px 0 0",lineHeight:1.5}}>{v.reason}</p>
+            {v.checks&&v.checks.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{v.checks.map((c,i)=><span key={i} style={{...mono,fontSize:10,color:c.ok?"#4ade80":"#f87171",padding:"2px 7px",background:"#0f172a",border:`1px solid ${c.ok?"#166534":"#7f1d1d"}`,borderRadius:6}}>{c.ok?"✓":"✗"} {c.k}{c.note?`: ${c.note}`:""}</span>)}</div>}
+          </div>
+        );})()}
+
         {/* Hero */}
         <div style={{...card,marginBottom:10}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
@@ -532,6 +562,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
         {/* Trade Plan — the clean labelled order ticket (entry/stop/T1/T2/size/R:R) */}
         <TradePlan sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id}/>
+
+        {/* Trade journal — log the trade + mark its outcome, so we can measure the
+            REAL win rate and whether following the signal beats overriding it. */}
+        <JournalCard assetId={config.id} sig={sig} pricePrefix={config.pricePrefix}/>
 
         {/* Section 4: flip/breakout confirmation banner (all assets). A single-candle
             level break isn't tradeable until the next candle confirms. */}
@@ -714,6 +748,42 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       </p>
     </div>
     <style>{`@keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:0.4}40%{transform:translateY(-8px);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+// ─── Trade journal card (2026-07-30) ─────────────────────────────────────────
+// Log the trade with one tap, then mark its outcome when it closes. Everything is
+// local to the device (getTrades/addTrade/updateTrade). This is the foundation for
+// real optimisation — it turns "I feel like I always lose" into a measured win rate,
+// and tells us whether FOLLOWING the signal beats overriding it.
+function JournalCard({ assetId, sig, pricePrefix }){
+  const [trades, setTrades] = useState(getTrades);
+  const journalBtn = { flex:1, fontSize:11, fontWeight:600, padding:"7px 8px", background:"#0f172a", color:"#94a3b8", border:"1px solid #334155", borderRadius:7, cursor:"pointer", ...mono };
+  const stats = journalStats();
+  const mine = trades.filter(t=>t.asset===assetId).slice(-1)[0];
+  const open = mine && mine.outcome==="open";
+  const log = () => { addTrade({ asset:assetId, action:sig.action, entry:sig.price, confidence:sig.confidence, tier:sig._htfTier??null, verdict:sig._verdict?.verdict||null, followed:true }); setTrades(getTrades()); };
+  const setOutcome = o => { if(mine){ updateTrade(mine.id,{ outcome:o }); setTrades(getTrades()); } };
+  return (
+    <div style={{...card,marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <span style={{fontSize:11,fontWeight:700,color:"#94a3b8",letterSpacing:"0.05em"}}>📓 TRADE JOURNAL</span>
+        <span style={{...mono,fontSize:10,color:"#64748b"}}>{stats.closed} closed · {stats.winRate!=null?`${stats.winRate}% win`:"no results yet"}{stats.followedPct!=null?` · ${stats.followedPct}% followed`:""}</span>
+      </div>
+      {sig.action!=="WAIT"&&(
+        !open
+          ? <button onClick={log} style={{...journalBtn,marginTop:8,width:"100%",flex:"none"}}>Log this {sig.action} as taken</button>
+          : <div style={{marginTop:8}}>
+              <p style={{fontSize:10,color:"#64748b",margin:"0 0 5px",...mono}}>Logged {mine.action} @ {pricePrefix}{fmt(mine.entry)} — mark the outcome when it closes:</p>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={()=>setOutcome("win")} style={{...journalBtn,borderColor:"#166534",color:"#4ade80"}}>Win</button>
+                <button onClick={()=>setOutcome("loss")} style={{...journalBtn,borderColor:"#7f1d1d",color:"#f87171"}}>Loss</button>
+                <button onClick={()=>setOutcome("be")} style={{...journalBtn}}>Breakeven</button>
+              </div>
+            </div>
+      )}
+      <p style={{fontSize:9,color:"#475569",margin:"8px 0 0",lineHeight:1.4}}>Stored locally on this device only. This is how we measure your REAL win rate and whether following the signal beats overriding it.</p>
     </div>
   );
 }

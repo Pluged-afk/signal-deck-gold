@@ -355,6 +355,19 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
   const volDiv = volDivergence(c4h.closes, c4h.volumes);
   const bb = bb4hRegime(c4h.closes);
 
+  // ── Chop + "extended" guards (2026-07-30) ────────────────────────────────────
+  // ranging: ADX below this pair's weak bar → the directional read is mostly noise
+  //   (display as RANGE, size down; NOT a hard block — ADX carries no measured
+  //   expectancy edge, so it must not veto the tested tier logic).
+  // extended: price just ran >1.5×ATR over the last 3×4h bars → entering now is
+  //   CHASING. Backtested 2026-07-30 (n=566-1509, non-overlapping): riding a fresh
+  //   >1.5×ATR move returns -0.05R/47% and fading it is noise — but sustained runs
+  //   CONTINUE, so the right action is WAIT-for-a-pullback, not "trade the other way".
+  const weakBar = cal ? cal.adxWeak : 20;
+  const ranging = adx != null && adx < weakBar;
+  const recentMoveATR = (atr4h && c4h.closes.length >= 4) ? Math.abs(price - c4h.closes[c4h.closes.length - 4]) / atr4h : 0;
+  const extended = recentMoveATR > 1.5;
+
   const nearRes = sr.resistance[0] && Math.abs(price - sr.resistance[0].level) / price < 0.005;
   const nearSup = sr.support[0] && Math.abs(price - sr.support[0].level) / price < 0.005;
   const pat4 = detectPatterns(buildCandles(c4h.opens, c4h.highs, c4h.lows, c4h.closes), { tf: "4h", atResistance: nearRes, atSupport: nearSup });
@@ -505,7 +518,36 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
     mtfConflict, allDisagree,
     strength, structure, divergence, sessionBias: sBias, prevDayBias: pdBias,
     vmeter, flip, rangeFade, revFade, regimeLabel, _cal: adxBars,
+    ranging, extended, recentMoveATR,
   };
+};
+
+// ─── TRADE / NO-TRADE / WAIT verdict (2026-07-30) ────────────────────────────
+// The "profit not quantity" gate. TRADE clears ONLY when every PROVEN filter passes:
+//   • daily-anchored tier ≥ 2 (the one measured edge — see backtest notes)
+//   • no binary event in the gate window (verified: trading through = coin flip at ~2.5× stop risk)
+//   • entry not extended (don't chase — tested 2026-07-30)
+//   • confidence ≥ MEDIUM (when a signal is present)
+// Everything else is NO-TRADE or WAIT, with the exact failing reason. Ranging (weak
+// ADX) does NOT hard-block — it only adds a size-down note. Pass `confidence` from a
+// live signal (omit for the free scan, which has no AI call) and `gate` = eventGate().
+export const tradeVerdict = (ta, { confidence = null, gate = null } = {}) => {
+  const checks = [];
+  const push = (k, ok, note) => checks.push({ k, ok, note });
+  const adxS = ta && ta.adx != null ? ta.adx.toFixed(0) : "n/a";
+  if (gate) return { verdict: "WAIT", headline: gate.phase === "pre" ? "Binary event ahead" : "Post-event chaos", reason: `${gate.event?.label || "high-impact event"} — wait for the window to clear, then re-scan for the post-event trend.`, checks };
+  if (!ta || ta.htfTier == null) { push("Tier", false, "unavailable — daily gate missing"); return { verdict: "NO-TRADE", headline: "Tier unavailable", reason: "Couldn't compute the daily gate — the single strongest filter. Not firing blind; re-scan when candle data is back.", checks }; }
+  const tierOK = ta.htfTier >= 2;
+  push("Tier ≥ 2", tierOK, `tier ${ta.htfTier}/3${tierOK ? " — daily-confirmed trend" : ta.htfTier === 0 ? " — daily dissents (negative expectancy)" : " — daily only (marginal)"}`);
+  const confOK = confidence == null ? true : ["MEDIUM", "HIGH", "VERY HIGH"].includes(String(confidence).toUpperCase());
+  if (confidence != null) push("Confidence ≥ MEDIUM", confOK, String(confidence));
+  push("Not chasing", !ta.extended, ta.extended ? `extended ${ta.recentMoveATR.toFixed(1)}×ATR — wait for a pullback` : "entry not extended");
+  push("Trend present", !ta.ranging, ta.ranging ? `ADX ${adxS} — ranging` : `ADX ${adxS}`);
+  if (!tierOK) return { verdict: "NO-TRADE", headline: "Below quality bar", reason: ta.htfTier === 0 ? "Tier 0 — the daily does not confirm the 4h. Negative expectancy. Hold out for a tier-2+ setup." : "Tier 1 — only the daily confirms (1h & weekly dissent). Marginal; wait for tier 2+.", checks };
+  if (!confOK) return { verdict: "NO-TRADE", headline: "Confidence too low", reason: `${confidence} — the quality mandate wants MEDIUM or better. Skip it.`, checks };
+  if (ta.extended) return { verdict: "WAIT", headline: "Extended — don't chase", reason: `Price ran ${ta.recentMoveATR.toFixed(1)}×ATR in the last ~12h. Entering here is chasing (tested: −0.05R). Wait for a pullback to the level, then take it.`, checks };
+  const sizeNote = ta.ranging ? " Trend is weak (ranging ADX) — size down." : "";
+  return { verdict: "TRADE", headline: `Quality setup · tier ${ta.htfTier}/3`, reason: `Daily-confirmed, entry not extended, confidence ok.${sizeNote}`, checks };
 };
 
 // ─── signal-quality score 0–100 (scorecard PASSes + local bonuses) ──────────
@@ -584,7 +626,12 @@ export const taPromptBlock = (ta, f) => {
   const sup = ta.sr.support.map(r => `${f(r.level)}(${r.touches}x)`).join(", ") || "none";
   const pats = (lbl, arr) => arr.length ? `${lbl}: ${arr.map(p => `${p.name}[${p.dir}]`).join(", ")}` : `${lbl}: none`;
   const st = ta.structure, sb = ta.sessionBias, pd = ta.prevDayBias;
-  return `MULTI-TIMEFRAME (computed locally — prefer trading WITH the 4h trend; if 4h≠1h cap confidence at LOW, do NOT auto-WAIT; only WAIT if all three timeframes disagree)
+  const nowUTC = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
+  return `CURRENT TIME: ${nowUTC} — judge every event you find in news against THIS timestamp. An event whose scheduled time is BEFORE now is ALREADY RELEASED: its outcome is priced in, so do NOT cap quality or "reduce size" for it, and do NOT build a trade that fades the post-event spike or infers direction from the headline (backtested: riding OR fading a post-event move is a losing coin flip, −0.05R / 47% win). Only a FUTURE event within 24h triggers the WAIT rules.
+
+TRADE-SELECTION MANDATE — the user wants PROFIT, not trade count. DEFAULT TO WAIT. Only give a directional call for a genuine quality set-up: tier ≥ 2 (daily-confirmed), not chasing an extended move, and a real catalyst or clean structure supports the direction. When in doubt, WAIT — a missed trade costs nothing; a forced low-quality trade loses money.${ta.extended ? `\n⚠ EXTENDED: price ran ${ta.recentMoveATR.toFixed(1)}×ATR in the last ~12h — entering now is CHASING (tested −0.05R). Prefer WAIT-for-pullback; if you still signal, the entry must be a pullback level, not current price.` : ""}${ta.ranging ? `\n⚠ RANGING: ADX ${ta.adx != null ? ta.adx.toFixed(0) : "n/a"} is below this pair's weak bar — weak trend / chop. Size down; do not dress a weak range up as a strong trend.` : ""}
+
+MULTI-TIMEFRAME (computed locally — prefer trading WITH the 4h trend; if 4h≠1h cap confidence at LOW, do NOT auto-WAIT; only WAIT if all three timeframes disagree)
   WEEKLY trend: ${ta.tW} | DAILY trend: ${ta.tD} | 4h trend: ${ta.t4} | 1h trend: ${ta.t1} | 15m trend: ${ta.t15} | OVERALL: ${ta.mtf.overall}${ta.mtf.aligned ? " (ALIGNED)" : ta.mtfConflict ? " (4h/1h CONFLICT — counter-trend risk, LOW confidence)" : " (mixed)"}${ta.allDisagree ? " — ALL THREE DISAGREE (chop → WAIT)" : ""}
   HIGHER-TIMEFRAME TIER ★★ ${ta.htfTier == null ? "unavailable (no daily candles) — ignore this rule" : `tier ${ta.htfTier}/3 — the DAILY ${ta.dailyConfirms ? "CONFIRMS" : "does NOT confirm"} the 4h ${ta.t4} direction${ta.dailyConfirms ? `, and ${ta.htfTier - 1} of {1h, weekly} also agree` : ""}.
   This is the STRONGEST measured predictor in this engine, and the DAILY carries almost all of it. Measured separately at a fixed target: the daily is worth +0.22/+0.24/+0.32R (p<0.000001 on gold/GBP/BTC), the weekly about half that, and the 1h NOTHING (p=0.38/0.87/0.45). So a set-up where the 1h and weekly agree but the DAILY dissents is a BAD set-up (28-45% win) even though two timeframes "agree" — do not be fooled by the count.

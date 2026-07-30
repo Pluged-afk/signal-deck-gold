@@ -534,6 +534,50 @@ export const bumpDaily = (field, n = 1) => {
   return d;
 };
 
+// ─── Refresh lockout (behavioural guardrail, 2026-07-30) ─────────────────────
+// After a signal fires for an asset, lock re-scans until the next 4h candle close.
+// The engine recomputes live and win-rate is FLAT across the 4h bar (measured), so a
+// mid-bar re-scan adds no edge — it only enables refresh-hunting and revenge re-entry,
+// the user's biggest leak. Advisory: the UI disables Refresh; self-clears at the close.
+export const next4hBoundaryMs = (nowMs = Date.now()) => {
+  const d = new Date(nowMs);
+  const nh = (Math.floor(d.getUTCHours() / 4) + 1) * 4;
+  const b = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0));
+  b.setUTCHours(nh);
+  return +b;
+};
+export const lockSignal = assetId => {
+  try { const m = JSON.parse(localStorage.getItem("sdg_lock") || "{}"); m[assetId] = next4hBoundaryMs(); localStorage.setItem("sdg_lock", JSON.stringify(m)); } catch (_) {}
+};
+export const signalLock = (assetId, nowMs = Date.now()) => {
+  try { const m = JSON.parse(localStorage.getItem("sdg_lock") || "{}"); const until = m[assetId]; if (until && until > nowMs) return { locked: true, until }; } catch (_) {}
+  return { locked: false, until: 0 };
+};
+
+// ─── Trade journal (localStorage, 2026-07-30) — measure the REAL win rate ─────
+// One record per trade taken. The foundation for any real optimisation: without the
+// actual outcomes we are guessing. Never influences a signal. Capped at 500 rows.
+export const JOURNAL_KEY = "sdg_journal";
+export const getTrades = () => { try { return JSON.parse(localStorage.getItem(JOURNAL_KEY) || "[]"); } catch (_) { return []; } };
+export const addTrade = t => { try { const a = getTrades(); a.push({ id: Date.now(), ts: Date.now(), outcome: "open", ...t }); localStorage.setItem(JOURNAL_KEY, JSON.stringify(a.slice(-500))); return a; } catch (_) { return getTrades(); } };
+export const updateTrade = (id, patch) => { try { const a = getTrades().map(x => x.id === id ? { ...x, ...patch } : x); localStorage.setItem(JOURNAL_KEY, JSON.stringify(a)); return a; } catch (_) { return getTrades(); } };
+export const journalStats = () => {
+  const all = getTrades();
+  const closed = all.filter(t => ["win", "loss", "be"].includes(t.outcome));
+  const wins = closed.filter(t => t.outcome === "win").length, losses = closed.filter(t => t.outcome === "loss").length, be = closed.filter(t => t.outcome === "be").length;
+  const followed = all.filter(t => t.followed === true).length;
+  return { total: all.length, closed: closed.length, wins, losses, be, winRate: closed.length ? Math.round(100 * wins / (wins + losses || 1)) : null, followedPct: all.length ? Math.round(100 * followed / all.length) : null };
+};
+
+// ─── Scan-All persistence (2026-07-30) ───────────────────────────────────────
+// The free tier read is stable within a 4h bar (tier is daily-anchored; the 4h trend
+// only updates on a 4h close), so cache the last Scan All and show it on every page
+// load until the next candle closes. `staleAfter` = the 4h boundary the read belongs
+// to; past it, the UI still shows the numbers but flags them as needing a re-scan.
+export const SCANS_KEY = "sdg_scans";
+export const saveScans = (map, ts = Date.now()) => { try { localStorage.setItem(SCANS_KEY, JSON.stringify({ ts, map })); } catch (_) {} };
+export const loadScans = () => { try { return JSON.parse(localStorage.getItem(SCANS_KEY) || "null"); } catch (_) { return null; } };
+
 // ─── Shared key storage (gold + EUR share data keys; all share Anthropic) ─────
 export const KEY_STORE = "sdg_keys";
 export const loadKeys = () => { try { return { anthropic:"", td:"", fred:"", ...JSON.parse(localStorage.getItem(KEY_STORE)||"{}") }; } catch(_){ return { anthropic:"", td:"", fred:"" }; } };
