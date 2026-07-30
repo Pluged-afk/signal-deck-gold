@@ -584,20 +584,15 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         const bull=[macd1h,macd4h,macdD].filter(m=>m?.aboveSignal).length;
         const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
         const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
-        // PDH/PDL liquidity sweep (generic, same as gold) — cable stop-hunts London
-        let sweep=null, nearPD=null;
-        if(pdh!=null&&pdl!=null){
-          for(let i=Math.max(0,c1h.closes.length-3);i<c1h.closes.length;i++){
-            if(c1h.highs[i]>pdh&&c1h.closes[i]<pdh) sweep={level:pdh,side:"PDH",note:"bearish reversal setup — watch SHORT"};
-            else if(c1h.lows[i]<pdl&&c1h.closes[i]>pdl) sweep={level:pdl,side:"PDL",note:"bullish reversal setup — watch LONG"};
-          }
-          if(!sweep){ if(Math.abs(spot.price-pdh)<=0.0015) nearPD={level:pdh,side:"PDH"}; else if(Math.abs(spot.price-pdl)<=0.0015) nearPD={level:pdl,side:"PDL"}; }
-        }
+        // Liquidity-sweep alert REMOVED (2026-07-30): backtested on GBP's own history a
+        // PDL/PDH sweep-reclaim reversed only 52% of the time over 1471 sweeps ≈ coin flip
+        // (gold's was removed at 49%). It added prompt noise with no edge. PDH/PDL kept as
+        // plain reference levels only.
         const li1=c1h.closes.length-1;
         const trNow=Math.max(c1h.highs[li1]-c1h.lows[li1],Math.abs(c1h.highs[li1]-c1h.closes[li1-1]),Math.abs(c1h.lows[li1]-c1h.closes[li1-1]));
         const atr20=calcATR(c1h.highs,c1h.lows,c1h.closes,20);
         const volRatio=atr20?p2(trNow/atr20):null;
-        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ema50,ema200,ma200,dailyAtr,h24,l24, pdh,pdl,sweep,nearPD, volRatio, bullMacd:bull, bearMacd:3-bull };
+        td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ema50,ema200,ma200,dailyAtr,h24,l24, pdh,pdl, volRatio, bullMacd:bull, bearMacd:3-bull };
         ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, cal:{ adxWeak:18, adxStrong:22 }, rangeFadeEnabled:true }); // GBP: range-fade enabled (cleared the regime-audit bar, p=0.007)
         addLog(`1h MACD:${macd1h.macd?.toFixed(5)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} vol:${ta.vmeter?.pct}% pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
@@ -657,9 +652,7 @@ BOE/FED RATE DIFFERENTIAL — STRUCTURED (FRED, not search)
   Use this STRUCTURED differential as the primary BOE-vs-Fed input. Web search is now only for FORWARD guidance (MPC vote split, next-meeting lean) — not for the rate level itself, which is given here.
 
 CABLE CONTEXT
-  PDH: ${gf(td?.pdh)} | PDL: ${gf(td?.pdl)} (previous-day high/low — cable stop-hunts these at the London open)${td?.sweep?`
-  🎯 LIQUIDITY SWEEP at ${gf(td.sweep.level)} (${td.sweep.side}) — spiked through then closed back inside: ${td.sweep.note}.`:td?.nearPD?`
-  ⚠ Price within 15 pips of ${td.nearPD.side} (${gf(td.nearPD.level)}) — London stop-hunt risk; wait for a confirmed break/rejection.`:""}
+  PDH: ${gf(td?.pdh)} | PDL: ${gf(td?.pdl)} (previous-day high/low — reference levels only; the sweep/stop-hunt alert was removed after testing showed a 52% reversal rate over 1471 sweeps = coin flip, no edge)
   UK DATA: search UK CPI/GDP/employment — cable moves hard on these (often 06:00-07:00 UTC) even when USD is quiet. Set uk_data_note if a UK surprise is in play. Weight UK-side binary events as heavily as US ones.
   Session note: London open (07-09 UTC) sets the day's range for cable — the most reliable window. Asian (21-07 UTC) is genuinely thin; fade less, expect chop.
 
@@ -685,8 +678,6 @@ ${ta?taPromptBlock(ta, v=>v.toFixed(5)):"MULTI-TIMEFRAME / PATTERNS / FIB: unava
     if(macro.sonia!=null) p.sonia=`${macro.sonia}%${macro.soniaDir?` (${macro.soniaDir.toLowerCase()})`:""}`;
     if(macro.rateDiff!=null) p.rate_diff=`${macro.rateDiff>0?"+":""}${macro.rateDiff}pp — ${macro.rateDiffLbl||""}`;
     if(td?.volRatio!=null) p._volRatio=td.volRatio;
-    p._sweepNote = td?.sweep ? `🎯 LIQUIDITY SWEEP at ${td.sweep.level.toFixed(5)} (${td.sweep.side}) — classic stop hunt. Reversal setup: ${td.sweep.note}.`
-      : td?.nearPD ? `⚠️ Price near ${td.nearPD.side} (${td.nearPD.level.toFixed(5)}) — London stop-hunt risk. Wait for confirmed break or rejection.` : null;
     p._sources=[...(ta?["Real OHLCV"]:[]),...(macro.dxy!=null?["FRED"]:[])];
     mergeTA(p, ta, v=>v.toFixed(5), GBP.scRows.map(r=>r.key));
   },

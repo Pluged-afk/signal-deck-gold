@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, eventGate, hmLeft } from "./shared";
 import { fetchLiveCalendar, upcomingLive } from "./calendar";
 import { ASSETS } from "./assets";
@@ -51,6 +51,10 @@ export default function Landing({ onSelect }) {
   const [scans, setScans] = useState(null);      // { gold:{ok,tier,...}, gbp:{...}, btc:{...} }
   const [scanning, setScanning] = useState(false);
   const [scanTs, setScanTs] = useState(null);
+  const [autoScan, setAutoScan] = useState(() => { try { return localStorage.getItem("sdg_autoscan") === "1"; } catch (_) { return false; } });
+  const lastSlotRef = useRef(-1);   // last 4h slot auto-scanned (dedupe)
+  const settleAtRef = useRef(0);    // when a blocked event settles → trigger an extra scan
+  const scanningRef = useRef(false);
   const meter = dailyMeter();
 
   // Scan all three at once (FREE — no AI). Skips any asset with a binary event inside
@@ -58,8 +62,9 @@ export default function Landing({ onSelect }) {
   // Uses the LIVE calendar (same source as the per-asset scan) so real dated events
   // (e.g. GDP Jul 30) are caught; the local approximate calendar is only a fallback if
   // the live feed is unavailable — it estimates CPI/PCE/GDP dates and would miss them.
-  const scanAll = async () => {
-    setScanning(true);
+  const scanAll = async (opts = {}) => {
+    if (scanningRef.current) return;
+    scanningRef.current = true; setScanning(true);
     const keys = loadKeys();
     const all = await fetchLiveCalendar().catch(() => null);
     const ids = ["gold", "gbp", "btc"];
@@ -71,8 +76,39 @@ export default function Landing({ onSelect }) {
       return cfg.scan ? cfg.scan(keys).catch(e => ({ ok: false, reason: e?.message })) : Promise.resolve({ ok: false, reason: "n/a" });
     }));
     const map = {}; ids.forEach((id, i) => map[id] = results[i]);
-    setScans(map); setScanTs(new Date()); setScanning(false);
+    // Track the soonest event settle-time so the auto-scheduler re-scans right after it clears.
+    const blocked = ids.map(id => map[id]).filter(s => s.binaryBlocked && s.gate);
+    settleAtRef.current = blocked.length ? Math.min(...blocked.map(s => s.gate.safeAt)) : 0;
+    // Notify (auto-scans only) when something is actually tradeable — tier 2+ or a fade.
+    if (opts.auto && typeof Notification !== "undefined" && Notification.permission === "granted") {
+      const good = ids.filter(id => { const s = map[id]; return s.ok && (s.tier >= 2 || s.rangeFade?.active || s.revFade?.active); });
+      if (good.length) try { new Notification("Signal Deck — worth a look", { body: good.map(id => `${id.toUpperCase()}: ${map[id].revFade?.active || map[id].rangeFade?.active ? "FADE setup" : "tier " + map[id].tier}`).join(" · ") }); } catch (_) {}
+    }
+    setScans(map); setScanTs(new Date()); setScanning(false); scanningRef.current = false;
   };
+
+  const toggleAuto = () => {
+    const nv = !autoScan; setAutoScan(nv);
+    try { localStorage.setItem("sdg_autoscan", nv ? "1" : "0"); } catch (_) {}
+    if (nv && typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission();
+    if (nv) scanAll({ auto: true });   // scan immediately on enable
+  };
+
+  // Auto-scan scheduler — fires at the 4 good 4h closes (08/12/16/20 UTC) and once an
+  // event's chaos window clears. Only while the tab is open; scanAll itself skips any
+  // asset still inside an event window, so it never scans (or notifies) into an event.
+  useEffect(() => {
+    if (!autoScan) return;
+    const t = now.getTime(), h = now.getUTCHours(), min = now.getUTCMinutes();
+    const slot = Math.floor(t / (4 * 3600e3));
+    const scheduledDue = [8, 12, 16, 20].includes(h) && min < 2 && slot !== lastSlotRef.current;
+    const settleDue = settleAtRef.current && t >= settleAtRef.current;
+    if ((scheduledDue || settleDue) && !scanningRef.current) {
+      if (scheduledDue) lastSlotRef.current = slot;
+      if (settleDue) settleAtRef.current = 0;
+      scanAll({ auto: true });
+    }
+  }, [now, autoScan]);
 
   const nc = nextClose(now);
   const minsLeft = Math.max(0, Math.floor((nc - now) / 60000));
@@ -102,15 +138,23 @@ export default function Landing({ onSelect }) {
               <p style={{fontSize:13,fontWeight:700,color:"#e2e8f0",margin:0}}>⚡ Free Scan — all assets</p>
               <p style={{fontSize:10,color:"#64748b",margin:"2px 0 0"}}>Checks the higher-timeframe tier of all three for €0 (no AI). Only pay where it's tier 2+.</p>
             </div>
-            <button onClick={scanAll} disabled={scanning}
-              style={{padding:"8px 16px",background:"#1e293b",border:"1px solid #4ade80",borderRadius:8,color:"#4ade80",fontSize:12,cursor:scanning?"default":"pointer",...mono,opacity:scanning?0.6:1}}>
-              {scanning?"Scanning…":"⚡ Scan All (free)"}
-            </button>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <button onClick={toggleAuto}
+                title="Auto-scan at 08/12/16/20 UTC while this tab is open. Skips events, resumes after they settle, notifies when a setup is worth a look."
+                style={{padding:"8px 12px",background:autoScan?"#04140a":"transparent",border:`1px solid ${autoScan?"#4ade80":"#334155"}`,borderRadius:8,color:autoScan?"#4ade80":"#94a3b8",fontSize:11,cursor:"pointer",...mono}}>
+                {autoScan?"🔄 Auto-scan ON":"Auto-scan OFF"}
+              </button>
+              <button onClick={()=>scanAll()} disabled={scanning}
+                style={{padding:"8px 16px",background:"#1e293b",border:"1px solid #4ade80",borderRadius:8,color:"#4ade80",fontSize:12,cursor:scanning?"default":"pointer",...mono,opacity:scanning?0.6:1}}>
+                {scanning?"Scanning…":"⚡ Scan All (free)"}
+              </button>
+            </div>
           </div>
 
           {/* live next-scan timer */}
           <p style={{...mono,fontSize:10,color:"#64748b",margin:"10px 0 0"}}>
             Next 4h close (when tiers can change): <span style={{color:"#94a3b8"}}>{ncUTC} · {ncEGY} EGY</span> — in {Math.floor(minsLeft/60)}h {minsLeft%60}m
+            {autoScan?<span style={{color:"#4ade80"}}> · auto-scan will run then</span>:null}
           </p>
 
           {/* scan results */}
