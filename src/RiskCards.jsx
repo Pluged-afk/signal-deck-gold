@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { mono, card, lbl, fmt } from "./shared";
+import { mono, card, lbl, fmt, lotSizeFor } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Section 3 accuracy/risk-transparency cards, shared by all three assets:
@@ -79,15 +79,9 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
   // The number pros compute BEFORE every trade and retail skips: the exact lot size
   // that makes the loss-at-stop equal your chosen risk %. contractVal = USD P/L per
   // 1.0 price unit per 1.0 lot. lots = riskAmount / (stopDistance × contractVal).
-  const SPEC = { gold: { cv: 100, unit: "oz", perLot: 100 }, gbp: { cv: 100000, unit: "units", perLot: 100000 }, btc: { cv: 1, unit: "BTC", perLot: 1 } }[assetId] || { cv: 1, unit: "units", perLot: 1 };
-  const rawLots = riskEur / (riskDist * SPEC.cv);      // treats risk amount ≈ quote-ccy (USD) for sizing
-  // Round DOWN to the 0.01-lot broker increment — rounding to nearest can over-risk
-  // (e.g. 0.0154 → 0.02 risks 30% more than chosen). Under-risking is always safe.
-  const lots = Math.floor(rawLots * 100) / 100;
-  const units = lots * SPEC.perLot;
-  const actualRisk = lots * riskDist * SPEC.cv;        // what that rounded lot size ACTUALLY risks
+  const ps = lotSizeFor(assetId, riskDist, riskEur) || { lots: 0, units: 0, actualRisk: 0, unit: "units", tooSmall: false };
+  const { lots, units, actualRisk, unit: psUnit, tooSmall } = ps;
   const actualPct = acct > 0 ? actualRisk / acct * 100 : 0;
-  const tooSmall = rawLots > 0 && lots < 0.01;         // account too small / stop too wide for this risk%
   const highRisk = riskPct > 2;
   const fp = v => v == null ? "—" : `${pricePrefix}${Number(v).toFixed(decimals)}`;
   const eur = v => (v >= 0 ? "+" : "−") + "€" + Math.abs(v).toFixed(0);
@@ -124,7 +118,7 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
         </div>
         <div style={{ textAlign: "right" }}>
           <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: tooSmall ? "#f87171" : "#4ade80", margin: 0 }}>{tooSmall ? "< 0.01 lot" : `${lots.toFixed(2)} lots`}</p>
-          {!tooSmall && <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: "2px 0 0" }}>= {units.toLocaleString(undefined, { maximumFractionDigits: SPEC.unit === "BTC" ? 3 : 0 })} {SPEC.unit}</p>}
+          {!tooSmall && <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: "2px 0 0" }}>= {units.toLocaleString(undefined, { maximumFractionDigits: psUnit === "BTC" ? 3 : 0 })} {psUnit}</p>}
         </div>
       </div>
       {tooSmall && <p style={{ fontSize: 10, color: "#fca5a5", ...mono, margin: "-4px 0 8px", lineHeight: 1.5 }}>⚠ Your {riskPct}% risk (€{riskEur.toFixed(0)}) is below the 0.01-lot minimum for this stop distance. Either widen the account, raise risk% (carefully), or skip — do NOT force an oversized 0.01 lot, it would risk more than {riskPct}%.</p>}
@@ -148,6 +142,51 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
       <p style={{ fontSize: 9, color: "#475569", margin: "8px 0 0", lineHeight: 1.5 }}>
         Lot size uses Pepperstone contract specs ({assetId === "gold" ? "1 lot = 100 oz" : assetId === "gbp" ? "1 lot = 100k, 1 pip = $10" : assetId === "btc" ? "1 lot = 1 BTC" : "standard"}) and assumes ≈1:1 €/$ — a € account risks ~8% more in $ terms, so confirm the exact lot in your broker's calculator before entering. Time decay: if no clear move develops, close by session end rather than holding a stalling position.
       </p>
+    </div>
+  );
+}
+
+// ─── Trade Plan — the clean, labelled "order ticket": entry / stop / T1 / T2 with
+// prices, R-multiples and what to do at each. Only for actionable signals. Pulls the
+// size from the same lotSizeFor helper + the stored account/risk so it agrees with the
+// Outcome Map. Deliberately labelled and explicit — not a one-liner. ────────────────
+export function TradePlan({ sig, pricePrefix = "", decimals = 2, assetId }) {
+  if (!sig || sig.action === "WAIT") return null;
+  const entry = num(sig.entry), stop = num(sig.stop), t1 = num(sig.t1), t2 = num(sig.t2);
+  if (entry == null || stop == null) return null;
+  const risk = Math.abs(entry - stop) || 1e-9;
+  const dir = sig.action === "SHORT" ? -1 : 1;
+  const rMul = p => p == null ? null : ((p - entry) * dir) / risk;
+  const fp = v => v == null ? "—" : `${pricePrefix}${Number(v).toFixed(decimals)}`;
+  const acct = (() => { try { const v = parseFloat(localStorage.getItem("sdg_acct")); return isFinite(v) && v > 0 ? v : 10000; } catch (_) { return 10000; } })();
+  const riskPct = (() => { try { const v = parseFloat(localStorage.getItem("sdg_riskpct")); return isFinite(v) && v > 0 ? v : 1; } catch (_) { return 1; } })();
+  const ps = lotSizeFor(assetId, risk, acct * riskPct / 100);
+  const dirCol = sig.action === "LONG" ? "#4ade80" : "#f87171";
+  const rrTgt = t2 != null ? rMul(t2) : t1 != null ? rMul(t1) : null;
+
+  const Row = ({ label, price, r, note, col }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "52px 1fr auto", gap: 8, alignItems: "baseline", padding: "6px 0", borderBottom: "1px solid #1e293b" }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: col, letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ ...mono, fontSize: 15, color: "#f1f5f9" }}>{fp(price)}</span>
+      <span style={{ fontSize: 10, color: "#64748b", textAlign: "right" }}>{r != null ? `${r >= 0 ? "+" : ""}${r.toFixed(1)}R · ` : ""}{note}</span>
+    </div>
+  );
+  return (
+    <div style={{ ...card, marginBottom: 10, border: `1px solid ${dirCol}55` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
+        <p style={{ ...lbl, margin: 0 }}>📋 Trade Plan</p>
+        <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: dirCol }}>{sig.action}{sig.confidence ? ` · ${sig.confidence}` : ""}</span>
+      </div>
+      <Row label="ENTRY" price={entry} r={null} note={sig.entry_note || "at market"} col="#e2e8f0" />
+      <Row label="STOP" price={stop} r={-1} note="full exit" col="#f87171" />
+      {t1 != null && <Row label="T1" price={t1} r={rMul(t1)} note="close 50% · stop → breakeven" col="#4ade80" />}
+      {t2 != null && <Row label="T2" price={t2} r={rMul(t2)} note="close the rest" col="#4ade80" />}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
+        <span style={{ ...mono, fontSize: 11, color: "#94a3b8" }}>
+          Size: {ps && !ps.tooSmall ? <b style={{ color: "#e2e8f0" }}>{ps.lots.toFixed(2)} lots</b> : ps?.tooSmall ? <span style={{ color: "#f87171" }}>&lt; 0.01 lot — see Outcome Map</span> : "set account below"}{ps && !ps.tooSmall ? ` (${riskPct}% risk)` : ""}
+        </span>
+        <span style={{ ...mono, fontSize: 11, color: "#64748b" }}>R:R {rrTgt != null ? `1:${Math.abs(rrTgt).toFixed(1)}` : "—"}</span>
+      </div>
     </div>
   );
 }

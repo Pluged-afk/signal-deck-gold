@@ -512,6 +512,17 @@ export const signalCount = () => { try { return parseInt(sessionStorage.getItem(
 // date rolls over. localStorage (same as keys/account/levels), never influences a
 // signal. TD_FREE_DAILY is the documented free-tier ceiling.
 export const TD_FREE_DAILY = 800;
+// Position size from Pepperstone contract specs. cv = USD P/L per 1.0 price unit per
+// 1.0 lot. Floored to the 0.01-lot increment so it never OVER-risks (under-risk is safe).
+// Shared by the Outcome Map and the Trade Plan so they always agree.
+export const LOT_SPEC = { gold: { cv: 100, unit: "oz", perLot: 100 }, gbp: { cv: 100000, unit: "units", perLot: 100000 }, btc: { cv: 1, unit: "BTC", perLot: 1 } };
+export const lotSizeFor = (assetId, riskDist, riskAmount) => {
+  const s = LOT_SPEC[assetId] || { cv: 1, unit: "units", perLot: 1 };
+  if (!riskDist || riskDist <= 0 || !(riskAmount > 0)) return null;
+  const raw = riskAmount / (riskDist * s.cv);
+  const lots = Math.floor(raw * 100) / 100;
+  return { lots, units: lots * s.perLot, actualRisk: lots * riskDist * s.cv, unit: s.unit, tooSmall: raw > 0 && lots < 0.01 };
+};
 const dayKey = () => new Date().toISOString().slice(0, 10);
 export const dailyMeter = () => {
   try { const d = JSON.parse(localStorage.getItem("sdg_daily") || "{}"); return (d.date === dayKey()) ? { date: d.date, paid: d.paid || 0, td: d.td || 0, scans: d.scans || 0 } : { date: dayKey(), paid: 0, td: 0, scans: 0 }; }

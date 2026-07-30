@@ -10,7 +10,7 @@ import {
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
-import { MarginalBanner, ScenarioMap, OutcomeMap } from "./RiskCards";
+import { MarginalBanner, ScenarioMap, OutcomeMap, TradePlan } from "./RiskCards";
 import { runPreCheck, storeSignalForPrecheck, PrecheckCard, BinaryBlockCard, precheckSummary } from "./precheck";
 import { localWait } from "./ta";
 import { useLiveEvents, EventStrip, computeMarginal, upcomingLive } from "./calendar";
@@ -529,6 +529,9 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
 
         {/* Section 3c: marginal-setup hero banner (visible regardless of confidence) */}
         <MarginalBanner conditions={sig._marginal}/>
+
+        {/* Trade Plan — the clean labelled order ticket (entry/stop/T1/T2/size/R:R) */}
+        <TradePlan sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id}/>
 
         {/* Section 4: flip/breakout confirmation banner (all assets). A single-candle
             level break isn't tradeable until the next candle confirms. */}

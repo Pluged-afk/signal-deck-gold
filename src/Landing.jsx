@@ -51,6 +51,7 @@ export default function Landing({ onSelect }) {
   const [scans, setScans] = useState(null);      // { gold:{ok,tier,...}, gbp:{...}, btc:{...} }
   const [scanning, setScanning] = useState(false);
   const [scanTs, setScanTs] = useState(null);
+  const [liveCal, setLiveCal] = useState(true);  // did the last scan reach the live calendar?
   const [autoScan, setAutoScan] = useState(() => { try { return localStorage.getItem("sdg_autoscan") === "1"; } catch (_) { return false; } });
   const lastSlotRef = useRef(-1);   // last 4h slot auto-scanned (dedupe)
   const settleAtRef = useRef(0);    // when a blocked event settles → trigger an extra scan
@@ -67,6 +68,7 @@ export default function Landing({ onSelect }) {
     scanningRef.current = true; setScanning(true);
     const keys = loadKeys();
     const all = await fetchLiveCalendar().catch(() => null);
+    setLiveCal(!!all);   // null = live feed unreachable → fell back to the estimate (fail-safe warns)
     const ids = ["gold", "gbp", "btc"];
     const results = await Promise.all(ids.map(id => {
       const cfg = ASSETS[id];
@@ -156,6 +158,14 @@ export default function Landing({ onSelect }) {
             Next 4h close (when tiers can change): <span style={{color:"#94a3b8"}}>{ncUTC} · {ncEGY} EGY</span> — in {Math.floor(minsLeft/60)}h {minsLeft%60}m
             {autoScan?<span style={{color:"#4ade80"}}> · auto-scan will run then</span>:null}
           </p>
+
+          {/* calendar fail-safe — if the live feed is down, say so instead of silently
+              trusting the local estimate (which guesses CPI/PCE/GDP dates and can miss one) */}
+          {scans&&!liveCal&&(
+            <p style={{...mono,fontSize:10,color:"#fbbf24",margin:"8px 0 0",lineHeight:1.5,padding:"6px 8px",background:"#1a1206",border:"1px solid #a16207",borderRadius:6}}>
+              ⚠ Live calendar unavailable — event detection is using estimated dates. FOMC/NFP are still accurate, but CPI/PCE/GDP dates are approximate and one could be missed. Check the economic calendar manually before trading.
+            </p>
+          )}
 
           {/* scan results */}
           {scans&&(
