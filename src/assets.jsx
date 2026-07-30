@@ -104,7 +104,7 @@ const GOLD = {
       const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
-    return runTierScan({ fetchSeries, rangeFadeEnabled:true, tdCalls:3 });
+    return runTierScan({ fetchSeries, rangeFadeEnabled:false, tdCalls:3 });
   },
   sessionsGuide:[
     { window:"08:00–10:00 UTC", label:"London Open — high volume, best signals", quality:"best" },
@@ -279,7 +279,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         }
         const volFading=vol1h&&c1h.volumes[li1]<c1h.volumes[li1-1]&&vol1h.average&&(c1h.volumes[li1-1]/vol1h.average)>1.5;
         td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ma200,dailyAtr,h24,l24,rounds, pdh,pdl, volRatio,nfpMove,nfpLarge,volFading, bullMacd:bull, bearMacd:3-bull };
-        ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, rangeFadeEnabled:true }); // GOLD: range-fade enabled (cleared the regime-audit bar, p=0.034)
+        ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, rangeFadeEnabled:false }); // GOLD: range-fade DISABLED by user request 2026-07-30 (flip to true to re-enable; validated p=0.034 but user prefers trend-only)
         addLog(`1h MACD:${macd1h.macd?.toFixed(2)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
@@ -435,7 +435,7 @@ const GBP = {
       const v=(d?.values||[]).reverse();
       return { times:v.map(x=>x.datetime), opens:v.map(x=>parseFloat(x.open)), closes:v.map(x=>parseFloat(x.close)), highs:v.map(x=>parseFloat(x.high)), lows:v.map(x=>parseFloat(x.low)), volumes:v.map(x=>parseFloat(x.volume)||0) };
     };
-    return runTierScan({ fetchSeries, rangeFadeEnabled:true, cal:{ adxWeak:18, adxStrong:22 }, tdCalls:3 });
+    return runTierScan({ fetchSeries, rangeFadeEnabled:false, cal:{ adxWeak:18, adxStrong:22 }, tdCalls:3 });
   },
   sessionsGuide:[
     { window:"07:00–09:00 UTC", label:"London Open — cable's primary liquidity window", quality:"best" },
@@ -593,7 +593,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
         const atr20=calcATR(c1h.highs,c1h.lows,c1h.closes,20);
         const volRatio=atr20?p2(trNow/atr20):null;
         td={ macd1h,rsi1h,atr1h,vwap,vol1h, macd4h,rsi4h,atr4h,vol4h, macdD,rsiD,volD, ema50,ema200,ma200,dailyAtr,h24,l24, pdh,pdl, volRatio, bullMacd:bull, bearMacd:3-bull };
-        ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, cal:{ adxWeak:18, adxStrong:22 }, rangeFadeEnabled:true }); // GBP: range-fade enabled (cleared the regime-audit bar, p=0.007)
+        ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, cal:{ adxWeak:18, adxStrong:22 }, rangeFadeEnabled:false }); // GBP: range-fade DISABLED by user request (flip to true to re-enable; validated p=0.007)
         addLog(`1h MACD:${macd1h.macd?.toFixed(5)} RSI:${rsi1h.toFixed(1)} | MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} vol:${ta.vmeter?.pct}% pull:${ta.pull?.state||"—"}`);
       } else addLog("1h/4h candles unavailable — skipping local TA");
     }catch(e){ addLog(`Twelve Data error: ${e.message}`); } }
@@ -710,7 +710,7 @@ const BTC = {
       const d = await r.json();
       return { times:d.map(k=>k[0]), opens:d.map(k=>parseFloat(k[1])), highs:d.map(k=>parseFloat(k[2])), lows:d.map(k=>parseFloat(k[3])), closes:d.map(k=>parseFloat(k[4])), volumes:d.map(k=>parseFloat(k[5])) };
     };
-    return runTierScan({ fetchSeries, rangeFadeEnabled:false, revFadeEnabled:true, tdCalls:0 });
+    return runTierScan({ fetchSeries, rangeFadeEnabled:false, revFadeEnabled:false, tdCalls:0 });
   },
   sessionsGuide:[
     { window:"13:00–16:00 UTC", label:"EU-US Overlap — best breakouts", quality:"best" },
@@ -879,7 +879,7 @@ Respond ONLY with valid JSON, no markdown, no text outside it:
       const pdh=c1d&&c1d.highs.length>=2?c1d.highs[c1d.highs.length-2]:null;
       const pdl=c1d&&c1d.lows.length>=2?c1d.lows[c1d.lows.length-2]:null;
       td={ macd1h,rsi1h,vol1h, macd4h,rsi4h,atr4h,vol4h, sma200, weeklyDir, whaleWick, pdh,pdl };
-      ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, revFadeEnabled:true }); // BTC: reversal-fade enabled (cleared the fade bar, p=0.001, both halves)
+      ta=analyzeTimeframes({ c15, c1h, c4h, c1d, c4hTimes:c4h.times, price:spot.price, atr4h, prevClose:c1d?c1d.closes[c1d.closes.length-2]:null, revFadeEnabled:false }); // BTC: reversal-fade DISABLED by user request (flip to true to re-enable; validated p=0.001)
       addLog(`MTF 4h:${ta.t4} 1h:${ta.t1} 15m:${ta.t15} ADX:${ta.adx?.toFixed(0)} pull:${ta.pull?.state||"—"} weekly:${weeklyDir}`);
     }catch(e){ addLog(`Binance candles error: ${e.message}`); } }
     else addLog("⚠ Binance candles unavailable — MTF/patterns/ATR skipped (Binance may be geo-restricted or rate-limited in your region). Price falls back to CoinGecko; TA scores NEUTRAL.");
