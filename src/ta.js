@@ -536,7 +536,15 @@ export const tradeVerdict = (ta, { confidence = null, gate = null } = {}) => {
   const push = (k, ok, note) => checks.push({ k, ok, note });
   const adxS = ta && ta.adx != null ? ta.adx.toFixed(0) : "n/a";
   if (gate) return { verdict: "WAIT", headline: gate.phase === "pre" ? "Binary event ahead" : "Post-event chaos", reason: `${gate.event?.label || "high-impact event"} — wait for the window to clear, then re-scan for the post-event trend.`, checks };
-  if (!ta || ta.htfTier == null) { push("Tier", false, "unavailable — daily gate missing"); return { verdict: "NO-TRADE", headline: "Tier unavailable", reason: "Couldn't compute the daily gate — the single strongest filter. Not firing blind; re-scan when candle data is back.", checks }; }
+  if (!ta || ta.htfTier == null) {
+    // htfTier is null in TWO distinct cases — the message must say which:
+    //   • the 4h trend is FLAT (data fine, just no trend to grade) → WAIT, re-scan won't help
+    //   • daily candles didn't load (htfOK false) → NO-TRADE, likely the data API's per-minute limit
+    if (ta && ta.t4 === "FLAT") { push("4h trend", false, "FLAT — no trend to grade"); return { verdict: "WAIT", headline: "No 4h trend", reason: "The 4h trend is FLAT — price is ranging inside its band, so there is no directional set-up to grade. Wait for the 4h to pick a direction (re-scanning won't change this).", checks }; }
+    // Daily candles didn't load — this is a DATA failure, NOT a trade verdict. Nothing
+    // was analysed, so it must not read as a red "NO-TRADE" (which means "analysed, skip").
+    return { verdict: "DATA ERROR", headline: "Couldn't load candle data", reason: "The price-data provider didn't return the daily candles — usually a per-minute API-limit hit. The tier couldn't be computed, so there's nothing to grade. This is a data hiccup, NOT a trade decision — wait ~60s and re-scan.", checks: [] };
+  }
   const tierOK = ta.htfTier >= 2;
   push("Tier ≥ 2", tierOK, `tier ${ta.htfTier}/3${tierOK ? " — daily-confirmed trend" : ta.htfTier === 0 ? " — daily dissents (negative expectancy)" : " — daily only (marginal)"}`);
   const confOK = confidence == null ? true : ["MEDIUM", "HIGH", "VERY HIGH"].includes(String(confidence).toUpperCase());

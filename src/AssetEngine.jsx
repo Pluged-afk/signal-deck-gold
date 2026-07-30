@@ -170,7 +170,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30) }); }catch(_){}
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
-      lockSignal(config.id); // behavioural lockout: no re-scan until the next 4h close
+      // Behavioural lockout: no re-scan until the next 4h close — but ONLY after a REAL
+      // analysed signal. A data failure (missing tier) must NOT lock, or the user gets
+      // trapped and can't re-run once the data pipe recovers.
+      if(parsed._verdict?.verdict !== "DATA ERROR" && !parsed._tierMissing) lockSignal(config.id);
       try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||price); }catch(_){}
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally{ setLoading(false); }
@@ -468,7 +471,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         {/* VERDICT — profit-first gate. The single most important line on the card:
             should you trade this at all? TRADE only clears on the proven filters
             (tier ≥2, no live event, not extended, confidence ≥ MEDIUM). */}
-        {sig._verdict&&(()=>{const v=sig._verdict;const meta={TRADE:{bg:"#052e16",bd:"#16a34a",fg:"#4ade80",ic:"✅"},WAIT:{bg:"#1f1206",bd:"#ea580c",fg:"#fb923c",ic:"⏸"},"NO-TRADE":{bg:"#1a0a0a",bd:"#b91c1c",fg:"#f87171",ic:"⛔"}}[v.verdict]||{bg:"#0f172a",bd:"#334155",fg:"#94a3b8",ic:"•"};return(
+        {sig._verdict&&(()=>{const v=sig._verdict;const meta={TRADE:{bg:"#052e16",bd:"#16a34a",fg:"#4ade80",ic:"✅"},WAIT:{bg:"#1f1206",bd:"#ea580c",fg:"#fb923c",ic:"⏸"},"NO-TRADE":{bg:"#1a0a0a",bd:"#b91c1c",fg:"#f87171",ic:"⛔"},"DATA ERROR":{bg:"#0f172a",bd:"#475569",fg:"#94a3b8",ic:"📡"}}[v.verdict]||{bg:"#0f172a",bd:"#334155",fg:"#94a3b8",ic:"•"};return(
           <div style={{...card,background:meta.bg,border:`2px solid ${meta.bd}`,marginBottom:10}}>
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <span style={{...mono,fontSize:18,fontWeight:800,color:meta.fg,letterSpacing:"0.08em"}}>{meta.ic} {v.verdict}</span>
