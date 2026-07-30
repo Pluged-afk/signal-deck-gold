@@ -56,6 +56,7 @@ export default function Landing({ onSelect }) {
   const lastSlotRef = useRef(-1);   // last 4h slot auto-scanned (dedupe)
   const settleAtRef = useRef(0);    // when a blocked event settles → trigger an extra scan
   const scanningRef = useRef(false);
+  const notifiedEventRef = useRef(0); // release-time of the last event we heads-up'd (dedupe)
   const meter = dailyMeter();
 
   // Scan all three at once (FREE — no AI). Skips any asset with a binary event inside
@@ -81,8 +82,18 @@ export default function Landing({ onSelect }) {
     // Track the soonest event settle-time so the auto-scheduler re-scans right after it clears.
     const blocked = ids.map(id => map[id]).filter(s => s.binaryBlocked && s.gate);
     settleAtRef.current = blocked.length ? Math.min(...blocked.map(s => s.gate.safeAt)) : 0;
+    const canNotify = typeof Notification !== "undefined" && Notification.permission === "granted";
+    // HEADS-UP: fire once per distinct event the moment it's within the 24h window, so
+    // you're told EVERY time an event is coming — not only when there's a setup.
+    if (opts.auto && canNotify && blocked.length) {
+      const soonest = blocked.map(s => s.gate).sort((a, b) => a.at - b.at)[0];
+      if (notifiedEventRef.current !== soonest.at) {
+        notifiedEventRef.current = soonest.at;
+        try { new Notification("Signal Deck — binary event", { body: `${soonest.event.label} ${soonest.event.ds} · ${soonest.event.tEgy} EGY — trading paused until after` }); } catch (_) {}
+      }
+    }
     // Notify (auto-scans only) when something is actually tradeable — tier 2+ or a fade.
-    if (opts.auto && typeof Notification !== "undefined" && Notification.permission === "granted") {
+    if (opts.auto && canNotify) {
       const good = ids.filter(id => { const s = map[id]; return s.ok && (s.tier >= 2 || s.rangeFade?.active || s.revFade?.active); });
       if (good.length) try { new Notification("Signal Deck — worth a look", { body: good.map(id => `${id.toUpperCase()}: ${map[id].revFade?.active || map[id].rangeFade?.active ? "FADE setup" : "tier " + map[id].tier}`).join(" · ") }); } catch (_) {}
     }
