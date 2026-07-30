@@ -346,25 +346,42 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         );
         const fadeObj = s.rangeFade?.active ? s.rangeFade : s.revFade?.active ? s.revFade : null;
         const fadeKind = s.revFade?.active ? "REVERSAL-FADE" : "RANGE-FADE";
-        const pass = s.tier>=TIER_GATE || !!fadeObj;
-        const col = fadeObj ? "#c084fc" : pass ? "#4ade80" : "#f87171";
-        const tierTxt={3:"tier 3 — daily+weekly+1h all confirm (HIGH-eligible)",2:"tier 2 — daily + one other confirm (MEDIUM)",1:"tier 1 — daily only (MEDIUM)",0:"tier 0 — daily does NOT confirm (LOW)"}[s.tier]||`tier ${s.tier}`;
+        const tierOK = s.tier>=TIER_GATE, strong = s.tier>=3, ext = !!s.extended, rng = !!s.ranging;
+        // Cost-first gate: only a CLEAN tier-3 earns the confident green "pay". tier 2 is
+        // marginal (a coin-flip on whether the AI's evidence check clears MEDIUM+ or comes
+        // back LOW). extended/ranging predictably return WAIT/NO-TRADE → "don't pay yet",
+        // so a paid call isn't burned on a setup the free data already knows is likely dead.
+        const st = fadeObj ? "fade" : !tierOK ? "skip" : ext ? "ext" : rng ? "rng" : strong ? "strong" : "marginal";
+        const M = {
+          fade:     { col:"#c084fc", bg:"#12081f", v:"✓ FADE SETUP — WORTH IT" },
+          strong:   { col:"#4ade80", bg:"#04140a", v:"✓ WORTH A PAID SIGNAL" },
+          marginal: { col:"#a3e635", bg:"#0c1406", v:"◐ OPTIONAL — tier 2 is marginal" },
+          ext:      { col:"#fb923c", bg:"#1a1206", v:"⚠ EXTENDED — DON'T PAY YET" },
+          rng:      { col:"#fbbf24", bg:"#161006", v:"◐ RANGING — likely WAIT, save the call" },
+          skip:     { col:"#f87171", bg:"#160606", v:"✕ BELOW TIER 2 — SKIP" },
+        }[st];
+        const col = M.col;
+        const tierTxt={3:"tier 3 — daily+weekly+1h all confirm (up to HIGH)",2:"tier 2 — daily + one other confirm (up to MEDIUM)",1:"tier 1 — daily only (up to MEDIUM)",0:"tier 0 — daily does NOT confirm (LOW)"}[s.tier]||`tier ${s.tier}`;
+        const msg = {
+          fade: `Fade set-up live: the trend trade loses here, so this signals a ${fadeObj?.dir} AGAINST the 4h ${s.t4} trend. Hit “Refresh ↗ (paid)” for the fade trade (LOW confidence, small target). This is the "no-trade → tradeable" case.`,
+          strong: "Strong structure (tier 3) — the best odds the paid signal returns a real TRADE. Worth the call. Final confidence still rides on the AI's live evidence check.",
+          marginal: "Marginal: tier 2 is a coin-flip on whether the AI's evidence check clears MEDIUM+ or comes back LOW → NO-TRADE. The free scan sees STRUCTURE only; the paid call adds the news/evidence it can't. Pay ONLY if you'll trade the exact levels regardless — otherwise a NO-TRADE here is a real cost.",
+          ext: `Price ran ${s.recentMoveATR!=null?s.recentMoveATR.toFixed(1):">1.5"}×ATR recently — entering is chasing, and the paid signal will most likely return WAIT. Don't pay yet: wait for a pullback, then re-scan (free).`,
+          rng: `ADX ${s.adx!=null?s.adx.toFixed(0):"n/a"} is below the weak bar — ranging. Directional signals here usually come back LOW/WAIT. Save the paid call; re-scan when a trend develops.`,
+          skip: "Paid signal blocked to save your money — tier 0/1 is LOW/negative-expectancy and no fade set-up. Re-scan (free) at the next 4h close (00/04/08/12/16/20 UTC) during a good session.",
+        }[st];
         return (
-          <div style={{...card,background:fadeObj?"#12081f":pass?"#04140a":"#160606",border:`2px solid ${col}`,marginBottom:10}}>
+          <div style={{...card,background:M.bg,border:`2px solid ${col}`,marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <p style={{fontSize:13,fontWeight:700,color:col,margin:0}}>⚡ Free scan · {fadeObj?`⇄ ${fadeKind} ${fadeObj.dir}`:tierTxt}</p>
-              <span style={{...mono,fontSize:11,color:col,fontWeight:700}}>{fadeObj?"✓ FADE SETUP — WORTH IT":pass?"✓ WORTH A PAID SIGNAL":"✕ BELOW TIER 2 — SKIP"}</span>
+              <p style={{fontSize:13,fontWeight:700,color:col,margin:0}}>⚡ Free scan · {fadeObj?`⇄ ${fadeKind} ${fadeObj.dir}`:tierTxt}{!fadeObj&&ext?" · ⚠ extended":!fadeObj&&rng?" · RANGE":""}</p>
+              <span style={{...mono,fontSize:11,color:col,fontWeight:700}}>{M.v}</span>
             </div>
             <p style={{...mono,fontSize:11,color:"#94a3b8",margin:"6px 0 0",lineHeight:1.5}}>
               1W {s.tW} · 1D {s.tD} · 4h {s.t4} · 1h {s.t1}{s.adx!=null?` · ADX ${s.adx.toFixed(0)}`:""}
               {s.revFade?.active?` · ${s.revFade.pullState} reversal`:""}
             </p>
-            <p style={{fontSize:11,color:fadeObj?"#e9d5ff":pass?"#86efac":"#fca5a5",...mono,margin:"6px 0 0",lineHeight:1.5}}>
-              {fadeObj
-                ? `Fade set-up live: the trend trade loses here, so this signals a ${fadeObj.dir} AGAINST the 4h ${s.t4} trend. Hit “Refresh ↗ (paid)” for the fade trade (LOW confidence, small target). This is the "no-trade → tradeable" case.`
-                : pass
-                ? "Hit “Refresh ↗ (paid)” to run the full AI signal — this setup cleared the tier gate."
-                : "Paid signal blocked to save your money — tier 0/1 is LOW/negative-expectancy and no fade set-up. Re-scan (free) at the next 4h close (00/04/08/12/16/20 UTC) during a good session."}
+            <p style={{fontSize:11,color:col,...mono,margin:"6px 0 0",lineHeight:1.5,opacity:0.92}}>
+              {msg}
             </p>
             <p style={{fontSize:9,color:"#475569",margin:"6px 0 0"}}>Computed locally from candles · €0 · no AI call. Same tier/fade the paid signal would use.</p>
           </div>
