@@ -501,8 +501,8 @@ export const PERMANENT_FOOTER =
   "No signal predicts outcomes with certainty. Confidence reflects data alignment, not guaranteed results. Losses are a normal part of any trading approach.";
 
 // ─── Session cost tracking (counts paid Anthropic calls this browser session) ─
-export const EST_COST = 0.18;      // € per paid signal — low estimate
-export const EST_COST_HIGH = 0.70; // € per paid signal — high estimate (more web search)
+export const EST_COST = 0.10;      // € per paid signal — low estimate (trimmed to 1-2 searches 2026-07-30)
+export const EST_COST_HIGH = 0.30; // € per paid signal — high estimate (BTC 2 searches + ETF flows)
 export const bumpSignalCount = () => { try { const n = (parseInt(sessionStorage.getItem("sdg_calls")) || 0) + 1; sessionStorage.setItem("sdg_calls", String(n)); return n; } catch (_) { return 0; } };
 export const signalCount = () => { try { return parseInt(sessionStorage.getItem("sdg_calls")) || 0; } catch (_) { return 0; } };
 

@@ -174,11 +174,9 @@ const GOLD = {
 
 ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, VWAP, volume, DXY, real yield, or COT. These are calculated from real API data.
 
-YOUR JOB (web search only for these):
-1. NEWS: Top gold market news last 24h. Fed commentary, inflation, geopolitical risk, ETF flows (GLD/IAU), VIX. Bloomberg/Reuters preferred.
-2. KEY LEVELS: Nearest major XAU/USD institutional support/resistance. Confirm or refine the provided S/R.
-3. MACRO CONTEXT: is any FOMC/CPI/NFP/PCE scheduled, and WHEN? Only an event within 24h forces WAIT (wait_type binary_event); an event 24–72h away is CAUTION ONLY — still give a directional call, just note it and advise reduced size. Do NOT treat a 2-day-out event as a WAIT trigger. Fed speakers today? Geopolitical events?
-4. BIAS SYNTHESIS: All pre-computed data + research → highest-probability directional bias.
+YOUR JOB — keep web searches to the MINIMUM; each one costs money and mostly re-fetches things the data package already has. Do NOT search for support/resistance (computed & provided), the economic calendar / whether an event is scheduled (provided authoritatively — see the binary-event line and SIGNAL RULES), DXY, real yield, or COT (all provided).
+1. NEWS — usually ONE search is enough: top gold catalysts in the last 24h — Fed commentary, inflation prints, geopolitical risk, ETF flows (GLD/IAU), major Fed speakers. Search again ONLY if that surfaces a specific unknown worth confirming.
+2. BIAS SYNTHESIS: all pre-computed data + that news → highest-probability directional bias.
 
 7-STEP SCORECARD RULES (+2 TA rows = 9 scored items):
 1. PRICE & VWAP: Upper/lower third of 24h range AND above/below VWAP → same direction = PASS.
@@ -509,12 +507,9 @@ const GBP = {
 
 ALL TECHNICAL DATA IS PRE-COMPUTED AND PROVIDED — do not search for price, MACD, RSI, ATR, EMA, VWAP, pivots, 200MA, or DXY. These are calculated from real API data.
 
-YOUR JOB (web search only for these):
-1. BOE FORWARD GUIDANCE ONLY (the rate LEVEL and the UK−US differential are already provided structurally from FRED SONIA — do not search for them): search "BOE Bank of England interest rate decision" for the MPC vote split and hawkish/dovish forward guidance for the NEXT meeting. Combine that guidance with the structured differential given in the data package.
-2. UK DATA: search "UK GDP inflation data" — latest UK CPI, GDP and employment/wages vs expectations. Which side (UK or US) is printing stronger.
-3. NEWS: top GBP/USD news last 24h — UK politics/fiscal, risk sentiment, GBP-specific analyst commentary.
-4. KEY LEVELS: nearest institutional GBP/USD support/resistance; confirm/refine the provided pivots.
-5. BIAS SYNTHESIS: all pre-computed data + research → highest-probability direction.
+YOUR JOB — keep web searches to the MINIMUM; each costs money and mostly re-fetches provided data. Do NOT search for the UK−US rate differential / rate levels (provided from FRED SONIA), support/resistance (computed & provided), DXY, or the economic calendar / whether CPI/GDP/BOE is scheduled (gated separately — you do not need to look it up).
+1. NEWS + guidance — usually ONE search: top GBP/USD catalysts in the last 24h — UK politics/fiscal, risk sentiment, PLUS any FRESH BOE forward-guidance / vote-split or UK data SURPRISE that has ALREADY been released. Combine these into a SINGLE query; search again only for a specific unknown.
+2. BIAS SYNTHESIS: all pre-computed data + that news → highest-probability direction.
 
 KEY CABLE LOGIC:
 - DXY (USD side) is a dominant filter — cable is USD-quoted, so DXY rising = SHORT GBP/USD, DXY falling = LONG. Never fight a strong DXY move.
@@ -984,7 +979,7 @@ ON-CHAIN CONTEXT (free-tier proxies: blockchain.info + mempool.space — SUPPLEM
 
 ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavailable — score candles & mtf NEUTRAL"}
 
-=== YOUR JOB: search BTC spot ETF daily flows (IBIT/FBTC — MOST IMPORTANT), whale/on-chain, regulatory news, Nasdaq/VIX risk tone, key round-number S/R, binary events → output JSON ===`;
+=== YOUR JOB — keep web searches to the MINIMUM (S/R, on-chain proxies, DXY, dominance and the event calendar are ALL already provided — do NOT search for them). Aim for ONE-TO-TWO searches: (1) BTC spot ETF daily flows (IBIT/FBTC — the one external driver worth a dedicated search), (2) a single catalyst check — regulatory / Nasdaq-VIX risk-tone news in the last 24h. Then output JSON ===`;
 
     return { pkg, price:spot.price, src:spot.src, session,
       meta:{ td, h24, l24, funding, fundHi, fundLo, oi, oiTrend, dom, fng, fngLabel, ta, onchain } };

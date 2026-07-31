@@ -82,7 +82,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       addLog("Sending to AI for news + synthesis...");
       setCostN(bumpSignalCount()); // count this paid Anthropic call
       setMeter(bumpDaily("paid")); // daily paid-signal tracker
-      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES + ACCURACY_RULES, userContent:pkg, addLog, maxSearches:(nfpAsset&&postNfp.active)?6:5, useProxy:signalProxyEnabled(config.id) });
+      // maxSearches is a SAFETY BACKSTOP, not the driver — the prompts now tell the model
+      // to do one/two searches and not to look up provided data (levels, calendar, DXY,
+      // rates, on-chain). Post-NFP gets one extra for the intraday DXY-reaction task.
+      const finalText = await runAI({ apiKey:keys.anthropic, system:config.system + WAIT_RULES + ACCURACY_RULES, userContent:pkg, addLog, maxSearches:(nfpAsset&&postNfp.active)?4:3, useProxy:signalProxyEnabled(config.id) });
       const parsed = parseJSON(finalText);
       if(!parsed){ addLog(`Parse failed. Raw start: ${(finalText||"").slice(0,120)}`); throw new Error("Could not parse signal JSON. Please retry."); }
       config.merge(parsed, meta);
