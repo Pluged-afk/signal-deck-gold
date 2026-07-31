@@ -547,15 +547,24 @@ export const tradeVerdict = (ta, { confidence = null, gate = null } = {}) => {
   }
   const tierOK = ta.htfTier >= 2;
   push("Tier ≥ 2", tierOK, `tier ${ta.htfTier}/3${tierOK ? " — daily-confirmed trend" : ta.htfTier === 0 ? " — daily dissents (negative expectancy)" : " — daily only (marginal)"}`);
-  const confOK = confidence == null ? true : ["MEDIUM", "HIGH", "VERY HIGH"].includes(String(confidence).toUpperCase());
-  if (confidence != null) push("Confidence ≥ MEDIUM", confOK, String(confidence));
+  // Confidence sets SIZE, not a veto: the tier is the proven edge (55-62% win at
+  // tier 2-3, independent of the AI's confidence — which is unproven as a win-rate
+  // predictor). A clean tier-2+ therefore trades regardless of confidence; LOW just
+  // trades SMALLER. (User choice 2026-07-30: "confidence → size", tier 1 still skipped.)
+  const confU = confidence == null ? null : String(confidence).toUpperCase();
+  const conviction = (confU === "HIGH" || confU === "VERY HIGH") ? "high" : confU === "LOW" ? "low" : "normal";
   push("Not chasing", !ta.extended, ta.extended ? `extended ${ta.recentMoveATR.toFixed(1)}×ATR — wait for a pullback` : "entry not extended");
   push("Trend present", !ta.ranging, ta.ranging ? `ADX ${adxS} — ranging` : `ADX ${adxS}`);
   if (!tierOK) return { verdict: "NO-TRADE", headline: "Below quality bar", reason: ta.htfTier === 0 ? "Tier 0 — the daily does not confirm the 4h. Negative expectancy. Hold out for a tier-2+ setup." : "Tier 1 — only the daily confirms (1h & weekly dissent). Marginal; wait for tier 2+.", checks };
-  if (!confOK) return { verdict: "NO-TRADE", headline: "Confidence too low", reason: `${confidence} — the quality mandate wants MEDIUM or better. Skip it.`, checks };
   if (ta.extended) return { verdict: "WAIT", headline: "Extended — don't chase", reason: `Price ran ${ta.recentMoveATR.toFixed(1)}×ATR in the last ~12h. Entering here is chasing (tested: −0.05R). Wait for a pullback to the level, then take it.`, checks };
-  const sizeNote = ta.ranging ? " Trend is weak (ranging ADX) — size down." : "";
-  return { verdict: "TRADE", headline: `Quality setup · tier ${ta.htfTier}/3`, reason: `Daily-confirmed, entry not extended, confidence ok.${sizeNote}`, checks };
+  // Size: LOW confidence → half, ranging → ×0.75; MEDIUM+ non-ranging → full.
+  let sizeMult = conviction === "low" ? 0.5 : 1.0;
+  if (ta.ranging) sizeMult = Math.round(sizeMult * 0.75 * 100) / 100;
+  if (confidence != null) push("Confidence → size", true, `${confU} → ${sizeMult < 1 ? Math.round(sizeMult * 100) + "% size" : "full size"}`);
+  const bits = []; if (conviction === "low") bits.push("LOW confidence"); if (ta.ranging) bits.push("ranging");
+  const sizeTxt = sizeMult < 1 ? ` ${bits.join(" + ")} → trade at ${Math.round(sizeMult * 100)}% size.` : "";
+  const headline = conviction === "low" ? `Tradeable · tier ${ta.htfTier}/3 · low conviction` : `Quality setup · tier ${ta.htfTier}/3`;
+  return { verdict: "TRADE", headline, reason: `Daily-confirmed, entry not extended.${sizeTxt}`, conviction, sizeMult, checks };
 };
 
 // ─── signal-quality score 0–100 (scorecard PASSes + local bonuses) ──────────

@@ -63,7 +63,7 @@ export function ScenarioMap({ sig, pricePrefix = "" }) {
 // ─── 3d: Outcome map (pure local arithmetic) ─────────────────────────────────
 // Win/loss in price, € and % of account, computed from entry/stop/T1/T2 and a
 // user-set account size + risk%. Breakeven trigger = 50% of the T1 distance.
-export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
+export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId, sizeMult = 1 }) {
   const [acct, setAcct] = useState(() => { const v = parseFloat(localStorage.getItem("sdg_acct")); return isFinite(v) && v > 0 ? v : 10000; });
   const [riskPct, setRiskPct] = useState(() => { const v = parseFloat(localStorage.getItem("sdg_riskpct")); return isFinite(v) && v > 0 ? v : 1; });
   const setA = v => { setAcct(v); try { localStorage.setItem("sdg_acct", String(v)); } catch (_) {} };
@@ -73,7 +73,11 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
   if (entry == null || stop == null) return null;
   const riskDist = Math.abs(entry - stop);
   if (!riskDist) return null;
-  const riskEur = acct * riskPct / 100;
+  // Conviction-adjusted risk: a LOW-confidence / ranging TRADE risks less (sizeMult<1).
+  // effPct is the risk actually used everywhere below so the €, %, and lots all agree.
+  const eff = (sizeMult > 0 && sizeMult < 1) ? sizeMult : 1;
+  const effPct = riskPct * eff;
+  const riskEur = acct * effPct / 100;
 
   // ── POSITION SIZE (Pepperstone contract specs) ──────────────────────────────
   // The number pros compute BEFORE every trade and retail skips: the exact lot size
@@ -90,12 +94,12 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
   const winRow = (label, price) => {
     if (price == null) return null;
     const R = Math.abs(price - entry) / riskDist;
-    return { label, price, eur: riskEur * R, pct: riskPct * R, r: R };
+    return { label, price, eur: riskEur * R, pct: effPct * R, r: R };
   };
   const rows = [
     winRow("Win at T1", t1),
     winRow("Win at T2", t2),
-    { label: "Loss at stop", price: stop, eur: -riskEur, pct: -riskPct, r: -1 },
+    { label: "Loss at stop", price: stop, eur: -riskEur, pct: -effPct, r: -1 },
   ].filter(Boolean);
   const beTrigger = t1 != null ? entry + (t1 - entry) * 0.5 : null;
 
@@ -114,14 +118,14 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 10px", marginBottom: 8, borderRadius: 8, background: "#04140a", border: "1px solid #166534", flexWrap: "wrap" }}>
         <div>
           <p style={{ fontSize: 10, color: "#4ade80", margin: "0 0 2px", letterSpacing: "0.05em", textTransform: "uppercase" }}>Position size — enter this</p>
-          <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: 0 }}>target {riskPct}% of €{Number(acct).toLocaleString()} · stop {riskDist.toFixed(decimals)}{assetId === "gbp" ? ` (${Math.round(riskDist * 10000)} pips)` : ""}{!tooSmall ? ` · actually risks €${actualRisk.toFixed(0)} (${actualPct.toFixed(2)}%)` : ""}</p>
+          <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: 0 }}>target {eff < 1 ? `${effPct.toFixed(2)}% (${riskPct}% × ${Math.round(eff * 100)}% conviction)` : `${riskPct}%`} of €{Number(acct).toLocaleString()} · stop {riskDist.toFixed(decimals)}{assetId === "gbp" ? ` (${Math.round(riskDist * 10000)} pips)` : ""}{!tooSmall ? ` · actually risks €${actualRisk.toFixed(0)} (${actualPct.toFixed(2)}%)` : ""}</p>
         </div>
         <div style={{ textAlign: "right" }}>
           <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: tooSmall ? "#f87171" : "#4ade80", margin: 0 }}>{tooSmall ? "< 0.01 lot" : `${lots.toFixed(2)} lots`}</p>
           {!tooSmall && <p style={{ ...mono, fontSize: 9, color: "#64748b", margin: "2px 0 0" }}>= {units.toLocaleString(undefined, { maximumFractionDigits: psUnit === "BTC" ? 3 : 0 })} {psUnit}</p>}
         </div>
       </div>
-      {tooSmall && <p style={{ fontSize: 10, color: "#fca5a5", ...mono, margin: "-4px 0 8px", lineHeight: 1.5 }}>⚠ Your {riskPct}% risk (€{riskEur.toFixed(0)}) is below the 0.01-lot minimum for this stop distance. Either widen the account, raise risk% (carefully), or skip — do NOT force an oversized 0.01 lot, it would risk more than {riskPct}%.</p>}
+      {tooSmall && <p style={{ fontSize: 10, color: "#fca5a5", ...mono, margin: "-4px 0 8px", lineHeight: 1.5 }}>⚠ Your {effPct.toFixed(2)}% risk (€{riskEur.toFixed(0)}) is below the 0.01-lot minimum for this stop distance. Either widen the account, raise risk% (carefully), or skip — do NOT force an oversized 0.01 lot, it would risk more than {effPct.toFixed(2)}%.</p>}
       {highRisk && !tooSmall && <p style={{ fontSize: 10, color: "#fbbf24", ...mono, margin: "-4px 0 8px", lineHeight: 1.5 }}>⚠ {riskPct}% per trade is aggressive — a normal losing streak (6-8 in a row happens) would cut the account hard. Pros risk 1-2%.</p>}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 84px 70px 66px", gap: 6, alignItems: "center", fontSize: 10, color: "#475569", paddingBottom: 4, borderBottom: "1px solid #1e293b" }}>
@@ -150,7 +154,7 @@ export function OutcomeMap({ sig, pricePrefix = "", decimals = 2, assetId }) {
 // prices, R-multiples and what to do at each. Only for actionable signals. Pulls the
 // size from the same lotSizeFor helper + the stored account/risk so it agrees with the
 // Outcome Map. Deliberately labelled and explicit — not a one-liner. ────────────────
-export function TradePlan({ sig, pricePrefix = "", decimals = 2, assetId }) {
+export function TradePlan({ sig, pricePrefix = "", decimals = 2, assetId, sizeMult = 1 }) {
   if (!sig || sig.action === "WAIT") return null;
   const entry = num(sig.entry), stop = num(sig.stop), t1 = num(sig.t1), t2 = num(sig.t2);
   if (entry == null || stop == null) return null;
@@ -160,7 +164,11 @@ export function TradePlan({ sig, pricePrefix = "", decimals = 2, assetId }) {
   const fp = v => v == null ? "—" : `${pricePrefix}${Number(v).toFixed(decimals)}`;
   const acct = (() => { try { const v = parseFloat(localStorage.getItem("sdg_acct")); return isFinite(v) && v > 0 ? v : 10000; } catch (_) { return 10000; } })();
   const riskPct = (() => { try { const v = parseFloat(localStorage.getItem("sdg_riskpct")); return isFinite(v) && v > 0 ? v : 1; } catch (_) { return 1; } })();
-  const ps = lotSizeFor(assetId, risk, acct * riskPct / 100);
+  // Conviction-adjusted risk: LOW confidence / ranging shrink the position (sizeMult<1)
+  // rather than blocking the trade — the tier edge is real, the confidence is a size dial.
+  const eff = (sizeMult > 0 && sizeMult < 1) ? sizeMult : 1;
+  const effPct = riskPct * eff;
+  const ps = lotSizeFor(assetId, risk, acct * effPct / 100);
   const dirCol = sig.action === "LONG" ? "#4ade80" : "#f87171";
   const rrTgt = t2 != null ? rMul(t2) : t1 != null ? rMul(t1) : null;
 
@@ -183,7 +191,7 @@ export function TradePlan({ sig, pricePrefix = "", decimals = 2, assetId }) {
       {t2 != null && <Row label="T2" price={t2} r={rMul(t2)} note="close the rest" col="#4ade80" />}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
         <span style={{ ...mono, fontSize: 11, color: "#94a3b8" }}>
-          Size: {ps && !ps.tooSmall ? <b style={{ color: "#e2e8f0" }}>{ps.lots.toFixed(2)} lots</b> : ps?.tooSmall ? <span style={{ color: "#f87171" }}>&lt; 0.01 lot — see Outcome Map</span> : "set account below"}{ps && !ps.tooSmall ? ` (${riskPct}% risk)` : ""}
+          Size: {ps && !ps.tooSmall ? <b style={{ color: "#e2e8f0" }}>{ps.lots.toFixed(2)} lots</b> : ps?.tooSmall ? <span style={{ color: "#f87171" }}>&lt; 0.01 lot — see Outcome Map</span> : "set account below"}{ps && !ps.tooSmall ? ` (${effPct.toFixed(2)}% risk${eff < 1 ? ` · ${Math.round(eff * 100)}% size, low conviction` : ""})` : ""}
         </span>
         <span style={{ ...mono, fontSize: 11, color: "#64748b" }}>R:R {rrTgt != null ? `1:${Math.abs(rrTgt).toFixed(1)}` : "—"}</span>
       </div>

@@ -581,7 +581,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         <MarginalBanner conditions={sig._marginal}/>
 
         {/* Trade Plan — the clean labelled order ticket (entry/stop/T1/T2/size/R:R) */}
-        <TradePlan sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id}/>
+        <TradePlan sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id} sizeMult={sig._verdict?.sizeMult ?? 1}/>
 
         {/* Trade journal — log the trade + mark its outcome, so we can measure the
             REAL win rate and whether following the signal beats overriding it. */}
@@ -656,7 +656,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         </div>)}
 
         {/* Section 3d: outcome map (price / € / % of account) — below Entry Plan on LONG/SHORT */}
-        {sig.action!=="WAIT" && <OutcomeMap sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id}/>}
+        {sig.action!=="WAIT" && <OutcomeMap sig={sig} pricePrefix={config.pricePrefix} decimals={dec} assetId={config.id} sizeMult={sig._verdict?.sizeMult ?? 1}/>}
 
         {/* Asset-specific panels (macro / derivatives / rates) */}
         {config.extraPanels(sig)}
