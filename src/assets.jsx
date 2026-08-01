@@ -721,7 +721,7 @@ const BTC = {
   riskRules:[
     "BTC is FAR more volatile than gold or GBP/USD — size down accordingly",
     "Max 1-2% of account at risk per trade — STRICTLY","ATR-based stop mandatory: 1.5× 4h ATR (often $1,000–3,000)",
-    "Minimum R:R 1:2.5 (higher than gold due to volatility)","Never hold through FOMC / CPI",
+    "Target R:R ≈ 1:2 at T2 (tier-scaled — calibrated for hit rate, not a rounder ratio)","Never hold through FOMC / CPI",
     "2-loss rule: two consecutive losses → stop trading BTC for 24h","Crowded-long funding at resistance = contrarian SHORT setup (threshold auto-calibrated to the current regime)",
   ],
   // 9-step (was 10): 200-SMA regime (+2pp measured edge) and BTC dominance (no
