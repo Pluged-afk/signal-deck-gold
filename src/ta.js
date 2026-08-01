@@ -531,11 +531,15 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
 // Everything else is NO-TRADE or WAIT, with the exact failing reason. Ranging (weak
 // ADX) does NOT hard-block — it only adds a size-down note. Pass `confidence` from a
 // live signal (omit for the free scan, which has no AI call) and `gate` = eventGate().
-export const tradeVerdict = (ta, { confidence = null, gate = null } = {}) => {
+export const tradeVerdict = (ta, { confidence = null, gate = null, action = null } = {}) => {
   const checks = [];
   const push = (k, ok, note) => checks.push({ k, ok, note });
   const adxS = ta && ta.adx != null ? ta.adx.toFixed(0) : "n/a";
   if (gate) return { verdict: "WAIT", headline: gate.phase === "pre" ? "Binary event ahead" : "Post-event chaos", reason: `${gate.event?.label || "high-impact event"} — wait for the window to clear, then re-scan for the post-event trend.`, checks };
+  // Defer to the model's own WAIT: if the full analysis returned WAIT (weak evidence,
+  // timeframe conflict, quality<35, or no clean entry), the verdict must NOT say TRADE
+  // over it — the tier being fine doesn't override the model choosing not to trade.
+  if (String(action).toUpperCase() === "WAIT") return { verdict: "WAIT", headline: "Analysis says wait", reason: "The full signal returned WAIT — no tradeable set-up right now (weak evidence, a timeframe conflict, or no clean entry). Nothing to size; re-scan at the next 4h close.", checks: [] };
   if (!ta || ta.htfTier == null) {
     // htfTier is null in TWO distinct cases — the message must say which:
     //   • the 4h trend is FLAT (data fine, just no trend to grade) → WAIT, re-scan won't help
@@ -591,8 +595,8 @@ export const signalQuality = (parsed, ta, scoredKeys) => {
   // de-rating of unconfirmed set-ups happens via the confidence cap, not the score.
   if (ta.htfTier === 3) bonus += 10;
   else if (ta.htfTier === 2 || ta.htfTier === 1) bonus += 5;
-  if (ta.vol4 && ta.vol4.cls === "HIGH") bonus += 5;
-  if (ta.adx != null && ta.adx > (ta._cal?.strong ?? 25)) bonus += 5; // per-asset strong-trend bar
+  // (removed 2026-07-30: +5 for HIGH volume and +5 for ADX>strong — both measured to
+  // carry NO edge, so crediting them leaked into confidence→size. Tier + divergence only.)
   if (ta.divergence && ta.divergence.type !== "none") bonus += 5; // momentum divergence confirmation
   const score = Math.min(100, pts + bonus);
   const label = score < 35 ? "WAIT" : score < 50 ? "LOW" : score < 70 ? "MEDIUM" : score < 85 ? "HIGH" : "VERY HIGH";

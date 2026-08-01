@@ -47,9 +47,11 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
   let price = null, src = null;
   try { const q = await config.quickPrice(keys); price = q?.price; src = q?.src; } catch (_) {}
 
-  // 1 — session
+  // 1 — session (INFORMATIONAL ONLY, blocking:false). Session quality was measured to
+  // carry NO edge — and it's INVERTED for BTC ("avoid" outperformed "best") — so it must
+  // never block a valid tier-2+ setup. Kept as a note; excluded from `pass`.
   const sessOk = goodSession(id, h);
-  const sess = { name: "Session", ok: sessOk, detail: sessOk ? `${config.session().label} — good window` : `Off-peak (${String(h).padStart(2, "0")}:00 UTC). Best ${id === "btc" ? "13:00–21:00" : "08:00–20:00"} UTC` };
+  const sess = { name: "Session", ok: sessOk, blocking: false, detail: sessOk ? `${config.session().label} — good window` : `Off-peak (${String(h).padStart(2, "0")}:00 UTC) — note only; session carries no measured edge, does not block` };
 
   // (price-location check removed — it blocked too many valid moving-between-levels setups)
 
@@ -65,15 +67,16 @@ export const runPreCheck = async ({ config, keys = {}, events }) => {
   const time = { name: "Min interval", ok: timeOk, detail: timeOk ? (pc.lastRefresh ? `${Math.round(since / 60000)} min since last refresh` : "first run") : `only ${Math.round(since / 60000)} min since last — wait ${MIN_INTERVAL_MIN - Math.round(since / 60000)} min` };
 
   const checks = [sess, evt, time];
-  return { pass: checks.every(c => c.ok), checks, price, src, saved: COST_PER_CALL, binary: soon || null, caution: caution || null, levels: pc.levels || [] };
+  // Only BLOCKING checks gate the paid signal (session is a note, not a gate).
+  return { pass: checks.filter(c => c.blocking !== false).every(c => c.ok), checks, price, src, saved: COST_PER_CALL, binary: soon || null, caution: caution || null, levels: pc.levels || [] };
 };
 
 // One-line summary for the status row under the refresh button.
 export const precheckSummary = r => {
   if (!r) return null;
   if (r.pass) return "conditions met";
-  const failed = r.checks.find(c => !c.ok);
-  return `not met (${failed.name.toLowerCase()})`;
+  const failed = r.checks.find(c => c.blocking !== false && !c.ok);
+  return `not met (${failed ? failed.name.toLowerCase() : "blocked"})`;
 };
 
 // ═══ Binary-event block (free) — shown when an event is within 72h ═══════════

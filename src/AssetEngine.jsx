@@ -170,7 +170,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       parsed._marginal = computeMarginal(ta, evNow, Date.now());
       // Central TRADE / NO-TRADE / WAIT verdict (profit-first gate — the strongest
       // predictors only: tier ≥2, no live event, not extended, confidence ≥ MEDIUM).
-      try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30) }); }catch(_){}
+      try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30), action: parsed.action }); }catch(_){}
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
       // Behavioural lockout: no re-scan until the next 4h close — but ONLY after a REAL
