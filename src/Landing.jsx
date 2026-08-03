@@ -60,6 +60,7 @@ export default function Landing({ onSelect }) {
   const settleAtRef = useRef(0);    // when a blocked event settles → trigger an extra scan
   const scanningRef = useRef(false);
   const notifiedEventRef = useRef(0); // release-time of the last event we heads-up'd (dedupe)
+  const didOpenScanRef = useRef(false); // guard: auto-scan once on open (if stale)
   const meter = dailyMeter();
 
   // Scan all three at once (FREE — no AI). Skips any asset with a binary event inside
@@ -111,11 +112,23 @@ export default function Landing({ onSelect }) {
     if (nv) scanAll({ auto: true });   // scan immediately on enable
   };
 
-  // Auto-scan scheduler — fires at the 4 good 4h closes (08/12/16/20 UTC) and once an
-  // event's chaos window clears. Only while the tab is open; scanAll itself skips any
-  // asset still inside an event window, so it never scans (or notifies) into an event.
+  // ON OPEN: if the cached scan is stale (from a previous 4h candle) or missing, scan
+  // immediately — so you never OPEN the app to an out-of-date tier and act on it. This is
+  // the exact trap that could bait a mistaken entry (a stale "tier 3 WORTH IT"). Runs once.
   useEffect(() => {
-    if (!autoScan) return;
+    if (didOpenScanRef.current) return;
+    didOpenScanRef.current = true;
+    const c = loadScans();
+    const fresh = c?.ts && (+c.ts >= next4hBoundaryMs(Date.now()) - 4 * 3600000);
+    if (!fresh) scanAll();
+  }, []);
+
+  // Scan scheduler — refreshes the tiers at each 4h close (08/12/16/20 UTC) and once an
+  // event's chaos window clears, WHENEVER the tab is open, so the displayed data can never
+  // silently go stale on you. The Auto-scan toggle only controls NOTIFICATIONS: on = ping
+  // when a setup is worth a look; off = refresh silently. scanAll skips assets inside an
+  // event window, so it never scans (or notifies) into an event.
+  useEffect(() => {
     const t = now.getTime(), h = now.getUTCHours(), min = now.getUTCMinutes();
     const slot = Math.floor(t / (4 * 3600e3));
     const scheduledDue = [8, 12, 16, 20].includes(h) && min < 2 && slot !== lastSlotRef.current;
@@ -123,7 +136,7 @@ export default function Landing({ onSelect }) {
     if ((scheduledDue || settleDue) && !scanningRef.current) {
       if (scheduledDue) lastSlotRef.current = slot;
       if (settleDue) settleAtRef.current = 0;
-      scanAll({ auto: true });
+      scanAll({ auto: autoScan }); // always refresh; notify only when alerts are on
     }
   }, [now, autoScan]);
 
@@ -157,9 +170,9 @@ export default function Landing({ onSelect }) {
             </div>
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
               <button onClick={toggleAuto}
-                title="Auto-scan at 08/12/16/20 UTC while this tab is open. Skips events, resumes after they settle, notifies when a setup is worth a look."
+                title="Tiers auto-refresh on open and at each 4h close (08/12/16/20 UTC) while this tab is open — always, so you never act on a stale scan. This toggle only controls ALERTS: ON = notify you when a setup is worth a look; OFF = refresh silently."
                 style={{padding:"8px 12px",background:autoScan?"#04140a":"transparent",border:`1px solid ${autoScan?"#4ade80":"#334155"}`,borderRadius:8,color:autoScan?"#4ade80":"#94a3b8",fontSize:11,cursor:"pointer",...mono}}>
-                {autoScan?"🔄 Auto-scan ON":"Auto-scan OFF"}
+                {autoScan?"🔔 Alerts ON":"🔕 Alerts OFF"}
               </button>
               <button onClick={()=>scanAll()} disabled={scanning}
                 style={{padding:"8px 16px",background:"#1e293b",border:"1px solid #4ade80",borderRadius:8,color:"#4ade80",fontSize:12,cursor:scanning?"default":"pointer",...mono,opacity:scanning?0.6:1}}>
