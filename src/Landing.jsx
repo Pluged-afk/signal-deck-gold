@@ -61,6 +61,8 @@ export default function Landing({ onSelect }) {
   const scanningRef = useRef(false);
   const notifiedEventRef = useRef(0); // release-time of the last event we heads-up'd (dedupe)
   const didOpenScanRef = useRef(false); // guard: auto-scan once on open (if stale)
+  const lastScanAtRef = useRef(0);      // last scan time — enforce a ~60s cooldown (TD free = 8 calls/min, a scan uses 6)
+  const SCAN_COOLDOWN_MS = 60000;
   const meter = dailyMeter();
 
   // Scan all three at once (FREE — no AI). Skips any asset with a binary event inside
@@ -70,6 +72,10 @@ export default function Landing({ onSelect }) {
   // the live feed is unavailable — it estimates CPI/PCE/GDP dates and would miss them.
   const scanAll = async (opts = {}) => {
     if (scanningRef.current) return;
+    // COOLDOWN: never fire two scans inside ~60s — one scan is 6 TD calls and the free
+    // tier is 8/min, so back-to-back scans (e.g. auto-on-open + a manual click) would blow
+    // the limit. `force` is only for the post-event settle scan, which is never that close.
+    if (!opts.force && Date.now() - lastScanAtRef.current < SCAN_COOLDOWN_MS) return;
     scanningRef.current = true; setScanning(true);
     const keys = loadKeys();
     const all = await fetchLiveCalendar().catch(() => null);
@@ -102,7 +108,7 @@ export default function Landing({ onSelect }) {
       if (good.length) try { new Notification("Signal Deck — worth a look", { body: good.map(id => `${id.toUpperCase()}: ${map[id].revFade?.active || map[id].rangeFade?.active ? "FADE setup" : "tier " + map[id].tier}`).join(" · ") }); } catch (_) {}
     }
     const ts = Date.now();
-    setScans(map); setScanTs(new Date(ts)); saveScans(map, ts); setScanning(false); scanningRef.current = false;
+    setScans(map); setScanTs(new Date(ts)); saveScans(map, ts); lastScanAtRef.current = ts; setScanning(false); scanningRef.current = false;
   };
 
   const toggleAuto = () => {
@@ -138,7 +144,7 @@ export default function Landing({ onSelect }) {
     if (scanningRef.current) return;
     if (settleDue) {
       settleAtRef.current = 0;
-      scanAll({ auto: autoScan }); // event ended + 30 min → scan the post-event tiers
+      scanAll({ auto: autoScan, force: true }); // event ended + 30 min → scan the post-event tiers (bypass cooldown)
     } else if (scheduledDue) {
       lastSlotRef.current = slot;                          // consume this 4h slot either way
       if (!waitingForSettle) scanAll({ auto: autoScan });  // SKIP the 4h scan while an event is pending
@@ -179,10 +185,12 @@ export default function Landing({ onSelect }) {
                 style={{padding:"8px 12px",background:autoScan?"#04140a":"transparent",border:`1px solid ${autoScan?"#4ade80":"#334155"}`,borderRadius:8,color:autoScan?"#4ade80":"#94a3b8",fontSize:11,cursor:"pointer",...mono}}>
                 {autoScan?"🔔 Alerts ON":"🔕 Alerts OFF"}
               </button>
-              <button onClick={()=>scanAll()} disabled={scanning}
-                style={{padding:"8px 16px",background:"#1e293b",border:"1px solid #4ade80",borderRadius:8,color:"#4ade80",fontSize:12,cursor:scanning?"default":"pointer",...mono,opacity:scanning?0.6:1}}>
-                {scanning?"Scanning…":"⚡ Scan All (free)"}
-              </button>
+              {(()=>{const cd=Math.max(0,Math.ceil((SCAN_COOLDOWN_MS-(+now-lastScanAtRef.current))/1000));const off=scanning||cd>0;return(
+              <button onClick={()=>scanAll()} disabled={off}
+                title={cd>0?`Cooldown ${cd}s — the free data tier allows 8 calls/min and one scan uses 6, so scans are spaced ~60s apart to never hit the limit.`:"Scan all three tiers for €0"}
+                style={{padding:"8px 16px",background:"#1e293b",border:`1px solid ${off?"#334155":"#4ade80"}`,borderRadius:8,color:off?"#64748b":"#4ade80",fontSize:12,cursor:off?"default":"pointer",...mono,opacity:off?0.6:1}}>
+                {scanning?"Scanning…":cd>0?`⏳ ${cd}s`:"⚡ Scan All (free)"}
+              </button>);})()}
             </div>
           </div>
 
