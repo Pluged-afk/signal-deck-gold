@@ -123,20 +123,25 @@ export default function Landing({ onSelect }) {
     if (!fresh) scanAll();
   }, []);
 
-  // Scan scheduler — refreshes the tiers at each 4h close (08/12/16/20 UTC) and once an
-  // event's chaos window clears, WHENEVER the tab is open, so the displayed data can never
-  // silently go stale on you. The Auto-scan toggle only controls NOTIFICATIONS: on = ping
-  // when a setup is worth a look; off = refresh silently. scanAll skips assets inside an
-  // event window, so it never scans (or notifies) into an event.
+  // Scan scheduler — refreshes tiers at each 4h close (08/12/16/20 UTC) whenever the tab is
+  // open. BINARY-EVENT AWARE: once a scan finds an event blocking any asset it records the
+  // settle time (event + 30 min), and the scheduler SKIPS the intervening 4h scans — it does
+  // NOT scan into the pre-event / chaos window — then fires ONE clean scan after the event is
+  // over + 30 min. (The blocked row's live countdown still ticks meanwhile off the 1s clock,
+  // so awareness isn't lost.) The Auto-scan toggle only controls NOTIFICATIONS.
   useEffect(() => {
     const t = now.getTime(), h = now.getUTCHours(), min = now.getUTCMinutes();
     const slot = Math.floor(t / (4 * 3600e3));
     const scheduledDue = [8, 12, 16, 20].includes(h) && min < 2 && slot !== lastSlotRef.current;
     const settleDue = settleAtRef.current && t >= settleAtRef.current;
-    if ((scheduledDue || settleDue) && !scanningRef.current) {
-      if (scheduledDue) lastSlotRef.current = slot;
-      if (settleDue) settleAtRef.current = 0;
-      scanAll({ auto: autoScan }); // always refresh; notify only when alerts are on
+    const waitingForSettle = settleAtRef.current && t < settleAtRef.current;
+    if (scanningRef.current) return;
+    if (settleDue) {
+      settleAtRef.current = 0;
+      scanAll({ auto: autoScan }); // event ended + 30 min → scan the post-event tiers
+    } else if (scheduledDue) {
+      lastSlotRef.current = slot;                          // consume this 4h slot either way
+      if (!waitingForSettle) scanAll({ auto: autoScan });  // SKIP the 4h scan while an event is pending
     }
   }, [now, autoScan]);
 
