@@ -219,17 +219,18 @@ export default function Landing({ onSelect }) {
                 const fadeDir=s.rangeFade?.active?s.rangeFade.dir:s.revFade?.active?s.revFade.dir:null;
                 const ext=s.ok&&s.extended;                 // ran >1.5×ATR — don't chase
                 const tierPass=s.ok&&(s.tier>=2||fade);
-                const pass=tierPass&&!ext;                  // tradeable now only if NOT extended
-                const col=!s.ok?"#fbbf24":ext?"#fb923c":fade?"#c084fc":tierPass?"#4ade80":"#f87171";
+                // Priority: tier<2 is a SKIP regardless of extended (a pullback won't fix a
+                // dissenting daily). "wait pullback" only applies to an otherwise-tradeable tier.
+                const col=!s.ok?"#fbbf24": !tierPass?"#f87171" : ext?"#fb923c":fade?"#c084fc":"#4ade80";
                 return (
                   <button key={c.id} onClick={()=>onSelect(c.id)}
                     style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"8px 10px",margin:"4px 0",background:"#020617",border:`1px solid ${col}44`,borderRadius:8,cursor:"pointer",...mono,textAlign:"left"}}>
                     <span style={{fontSize:12,color:c.accentText,fontWeight:700,minWidth:70}}>{c.glyph} {c.name}</span>
                     <span style={{fontSize:11,color:"#94a3b8",flex:1}}>
-                      {s.ok?`1D ${s.tD} · 4h ${s.t4} · 1h ${s.t1}${s.ranging?" · RANGE":""}${ext?` · ⚠ ran ${s.recentMoveATR?.toFixed(1)}×ATR`:""}${fade?` · ⇄ ${fadeDir} fade`:""}`:`scan failed — ${s.reason||"n/a"}`}
+                      {s.ok?`1D ${s.tD} · 4h ${s.t4} · 1h ${s.t1}${s.ranging?" · RANGE":""}${tierPass&&ext?` · ⚠ ran ${s.recentMoveATR?.toFixed(1)}×ATR`:""}${fade?` · ⇄ ${fadeDir} fade`:""}`:`scan failed — ${s.reason||"n/a"}`}
                     </span>
                     <span style={{fontSize:11,fontWeight:700,color:col,minWidth:135,textAlign:"right"}}>
-                      {!s.ok?"— proceed manually":ext?`tier ${s.tier} · wait pullback`:fade?`⇄ FADE ✓ WORTH IT`:pass?`tier ${s.tier} ✓ WORTH IT`:`tier ${s.tier} ✕ skip`}
+                      {!s.ok?"— proceed manually": !tierPass?`tier ${s.tier} ✕ skip` : ext?`tier ${s.tier} · wait pullback`:fade?`⇄ FADE ✓ WORTH IT`:`tier ${s.tier} ✓ WORTH IT`}
                     </span>
                   </button>
                 );
