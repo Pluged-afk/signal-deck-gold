@@ -40,7 +40,7 @@ const runTierScan = async ({ fetchSeries, rangeFadeEnabled, revFadeEnabled, cal,
       prevClose: c1d && c1d.closes.length >= 2 ? c1d.closes[c1d.closes.length - 2] : null,
       cal, rangeFadeEnabled, revFadeEnabled,
     });
-    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, revFade: ta.revFade, extended: ta.extended, ranging: ta.ranging, recentMoveATR: ta.recentMoveATR, price };
+    return { ok: true, tier: ta.htfTier, regime: ta.regimeLabel, t4: ta.t4, t1: ta.t1, tD: ta.tD, tW: ta.tW, adx: ta.adx, rangeFade: ta.rangeFade, revFade: ta.revFade, extended: ta.extended, ranging: ta.ranging, recentMoveATR: ta.recentMoveATR, price, atr: atr4h, ta };
   } catch (e) { return { ok: false, reason: e?.message || "scan failed" }; }
 };
 
@@ -81,12 +81,17 @@ function mergeTA(p, ta, fnum, scoredKeys) {
 // ASSET 1 — GOLD (XAU/USD) — 10-step engine with multi-timeframe TA
 // ════════════════════════════════════════════════════════════════════════════
 const GOLD = {
-  id:"gold", name:"SIGNAL DECK GOLD", symbol:"XAU/USD", headerNote:"XAU/USD · 9-Step · Real APIs",
+  id:"gold", name:"SIGNAL DECK GOLD", symbol:"XAU/USD", headerNote:"XAU/USD · Gold-only · Real APIs",
+  // 2026-08-15: render the simplified binary terminal (GoldMinimal.jsx) — live
+  // chart + pullback meter + entry/SL/TP + a single TRADE / NO-TRADE call. The
+  // full engine compute (pipeline, tier, verdict) below is UNCHANGED; only the
+  // presentation is swapped. Set false to restore the full multi-card display.
+  minimal:true,
   pricePrefix:"$",
   theme:{ accent:"#ca8a04", accentText:"#fbbf24", panelBg:"#1c1408", panelBorder:"#78350f", loader:"#ca8a04" },
   keyFields:[
-    { field:"anthropic", label:"Anthropic API Key", hint:"required — powers the AI signal", ph:"sk-ant-..." },
-    { field:"td",        label:"Twelve Data Key",   hint:"MACD, RSI, ATR, VWAP, Volume, 200MA", ph:"a1b2c3d4..." },
+    { field:"anthropic", label:"Anthropic API Key", hint:"OPTIONAL — only for the on-demand AI news check", ph:"sk-ant-..." },
+    { field:"td",        label:"Twelve Data Key",   hint:"required — candles, MACD, RSI, ATR, VWAP, 200MA", ph:"a1b2c3d4..." },
     { field:"fred",      label:"FRED API Key",      hint:"real yield + DXY (free, instant)", ph:"abcdef123456..." },
   ],
   session:getFxSession,
@@ -1012,3 +1017,12 @@ ${ta?taPromptBlock(ta, v=>"$"+f2(v)):"MULTI-TIMEFRAME / PATTERNS / FIB: unavaila
 };
 
 export const ASSETS = { gold:GOLD, gbp:GBP, btc:BTC };
+
+// ── Active-asset gate (2026-08-15) ───────────────────────────────────────────
+// GOLD-ONLY focus, per user request. The GBP + BTC engines above are FULLY
+// INTACT and validated — they are ARCHIVED, not deleted: they simply no longer
+// appear on the landing page, in "Scan All", or as a mountable engine. Nothing
+// about their pipeline/scorecard/tier logic was changed. To bring either back,
+// add its id to this list (e.g. ["gold","gbp","btc"]) — that is the only change
+// needed to fully restore it.
+export const ENABLED_ASSETS = ["gold"];   // was ["gold","gbp","btc"]

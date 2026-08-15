@@ -8,12 +8,14 @@ import {
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
   dailyMeter, bumpDaily, TD_FREE_DAILY, eventGate, hmLeft,
   lockSignal, signalLock, addTrade, getTrades, updateTrade, journalStats,
+  addShadow, shadowLevels, gateThreshold,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
 import { MarginalBanner, ScenarioMap, OutcomeMap, TradePlan } from "./RiskCards";
 import { runPreCheck, storeSignalForPrecheck, PrecheckCard, BinaryBlockCard, precheckSummary } from "./precheck";
-import { localWait, tradeVerdict } from "./ta";
+import { localWait, tradeVerdict, localSignal } from "./ta";
+import GoldMinimal from "./GoldMinimal";
 import { useLiveEvents, EventStrip, computeMarginal, upcomingLive } from "./calendar";
 
 // Renders any asset defined in assets.jsx. The asset's `pipeline` is the only
@@ -22,7 +24,9 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   const T = config.theme;
   const [keys,    setKeys]    = useState(loadKeys);
   const [tmpKeys, setTmpKeys] = useState(loadKeys);
-  const [keysSet, setKeysSet] = useState(() => !!loadKeys().anthropic);
+  // Minimal (free-first) assets need only the Twelve Data key (candles); the
+  // Anthropic key is OPTIONAL there — used solely for the on-demand AI news check.
+  const [keysSet, setKeysSet] = useState(() => { const k = loadKeys(); return config.minimal ? !!k.td : !!k.anthropic; });
   const [sig,     setSig]     = useState(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -170,7 +174,24 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       parsed._marginal = computeMarginal(ta, evNow, Date.now());
       // Central TRADE / NO-TRADE / WAIT verdict (profit-first gate — the strongest
       // predictors only: tier ≥2, no live event, not extended, confidence ≥ MEDIUM).
-      try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30), action: parsed.action }); }catch(_){}
+      try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30), action: parsed.action, tierThreshold: gateThreshold() }); }catch(_){}
+      // ── SHADOW RECORDER (learning loop) — log this signal's hypothetical levels
+      // whether it's a TRADE or not, so NO-TRADE false-negatives can be resolved
+      // from candles later. Local only, never influences the signal. ──────────────
+      try{
+        const V = parsed._verdict?.verdict;
+        const side = parsed.action==="LONG"?"LONG":parsed.action==="SHORT"?"SHORT":(ta?.t4==="BULL"?"LONG":ta?.t4==="BEAR"?"SHORT":null);
+        if(side){
+          if(V==="TRADE" && parseFloat(parsed.entry)>0 && parseFloat(parsed.stop)>0){
+            addShadow({ asset:config.id, verdict:"TRADE", reason:`tier ${ta?.htfTier}`, tier:ta?.htfTier, side,
+              entry:parseFloat(parsed.entry), sl:parseFloat(parsed.stop), tp1:parseFloat(parsed.t1)||null, tp2:parseFloat(parsed.t2)||null,
+              risk:Math.abs(parseFloat(parsed.entry)-parseFloat(parsed.stop))||null });
+          } else {
+            const lv = shadowLevels(side, parseFloat(parsed.price), ta?.atr4h, ta?.htfTier);
+            if(lv) addShadow({ asset:config.id, verdict:V||"NO-TRADE", reason:parsed._verdict?.headline||`tier ${ta?.htfTier}`, tier:ta?.htfTier, side, ...lv });
+          }
+        }
+      }catch(_){}
       addLog("Signal complete.");
       setSig(parsed); setTs(new Date());
       // Behavioural lockout: no re-scan until the next 4h close — but ONLY after a REAL
@@ -223,9 +244,13 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       // tradeable, so they must NOT be blocked by the tier gate — that is exactly
       // the "turn a no-trade into a tradeable win" case.
       const fade = scan.rangeFade?.active || scan.revFade?.active;
-      if(scan.ok && scan.tier != null && scan.tier < TIER_GATE && !fade){
+      const gThr = gateThreshold();   // learning-adaptable gate (default 2)
+      if(scan.ok && scan.tier != null && scan.tier < gThr && !fade){
         setPrechecking(false);
-        addLog(`Free scan: tier ${scan.tier} (< ${TIER_GATE}) and no fade set-up — paid signal blocked to save cost.`);
+        addLog(`Free scan: tier ${scan.tier} (< ${gThr}) and no fade set-up — paid signal blocked to save cost.`);
+        // SHADOW RECORDER: log the SKIPPED setup's hypothetical levels (the core
+        // false-negative case — a tier<2 NO-TRADE we never paid to analyse). Local.
+        try{ const side = scan.t4==="BULL"?"LONG":scan.t4==="BEAR"?"SHORT":null; const lv = side && shadowLevels(side, scan.price, scan.atr, scan.tier); if(lv) addShadow({ asset:config.id, verdict:"NO-TRADE", reason:`tier ${scan.tier}`, tier:scan.tier, side, ...lv }); }catch(_){}
         return; // hard block, no paid call
       }
       if(fade) addLog(`Free scan: ${scan.revFade?.active?"reversal":"range"}-fade set-up live — paid signal allowed (tradeable fade against the trend).`);
@@ -240,6 +265,43 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     if(res.pass) fetchSignal();
   }, [keys, config, events, fetchSignal, usesTD, refresh]);
 
+  // FREE local signal (no AI, €0) — the DEFAULT. Reuses the free tier-scan's data
+  // (candles → analyzeTimeframes) and synthesises the full signal locally: the
+  // validated verdict + the validated entry/SL/TP formula. No Anthropic call, no
+  // Anthropic key needed. The optional AI news check (fetchSignal) runs on top.
+  const computeFreeSignal = useCallback(async () => {
+    if(!keys.td){ setError("Twelve Data key required for candles."); setKeysSet(false); return; }
+    setPrecheck(null); setLoading(true); setError(null); logRef.current=[]; setDataLog([]);
+    try{
+      addLog("Computing free local signal (no AI)…");
+      const scan = await config.scan(keys);
+      setMeter(dailyMeter());
+      if(!scan.ok) throw new Error(scan.reason || "Couldn't fetch candles.");
+      const ta = scan.ta;
+      if(!ta) throw new Error("No technical data returned from the scan.");
+      const parsed = localSignal(ta, scan.price, config.decimals || 2, gateThreshold());
+      try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30), action: parsed.action, tierThreshold: gateThreshold() }); }catch(_){}
+      // shadow recorder (same as the paid path)
+      try{
+        const V = parsed._verdict?.verdict;
+        const side = parsed.action==="LONG"?"LONG":parsed.action==="SHORT"?"SHORT":null;
+        if(side){
+          if(V==="TRADE" && parseFloat(parsed.entry)>0){
+            addShadow({ asset:config.id, verdict:"TRADE", reason:`tier ${ta.htfTier}`, tier:ta.htfTier, side, entry:parseFloat(parsed.entry), sl:parseFloat(parsed.stop), tp1:parseFloat(parsed.t1)||null, tp2:parseFloat(parsed.t2)||null, risk:Math.abs(parseFloat(parsed.entry)-parseFloat(parsed.stop))||null });
+          } else {
+            const lv = shadowLevels(side, scan.price, ta.atr4h, ta.htfTier);
+            if(lv) addShadow({ asset:config.id, verdict:V||"NO-TRADE", reason:parsed._verdict?.headline||`tier ${ta.htfTier}`, tier:ta.htfTier, side, ...lv });
+          }
+        }
+      }catch(_){}
+      addLog("Free signal complete (local, no AI cost).");
+      setSig(parsed); setTs(new Date());
+      if(parsed._verdict?.verdict !== "DATA ERROR") lockSignal(config.id);
+      try{ storeSignalForPrecheck(config.id, parsed, parseFloat(parsed.price)||scan.price); }catch(_){}
+    }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
+    finally{ setLoading(false); }
+  }, [keys, config, events]);
+
   const as = sig?aStyl(sig.action):{};
   const sc = sig?.scorecard||{};
   const wknd = isWeekend();
@@ -251,6 +313,25 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   // Themed buttons
   const primaryBtn = { padding:"8px 18px", background:"#1e293b", border:`1px solid ${T.accent}`, borderRadius:8, color:T.accentText, fontSize:12, cursor:"pointer", ...mono };
   const ghostBtn   = { padding:"6px 10px", background:"transparent", border:"1px solid #334155", borderRadius:8, color:"#94a3b8", fontSize:11, cursor:"pointer", ...mono };
+
+  // ── Simplified binary terminal (Gold, config.minimal) ───────────────────────
+  // Reuses ALL of the compute above (fetchSignal/attemptSignal/scanOnly and the
+  // sig/_verdict it produces); only the presentation is swapped. Falls through to
+  // the full render (below) while keys aren't set, so the key-entry form is reused.
+  if (config.minimal && keysSet) {
+    return (
+      <GoldMinimal
+        config={config} T={T} keys={keys}
+        sig={sig} scanResult={scanResult}
+        loading={loading} prechecking={prechecking} scanning={scanning}
+        error={error} tdWarn={tdWarn} now={now} meter={meter} costN={costN}
+        onSignal={() => computeFreeSignal()} onScan={() => scanOnly()}
+        onAICheck={() => fetchSignal()} hasAI={!!keys.anthropic}
+        onKeys={() => setKeysSet(false)} onBack={onBack}
+        onAckTD={() => attemptSignal({ ackTD: true })}
+      />
+    );
+  }
 
   return (
     <div style={{background:"#020617",minHeight:"100vh",color:"#e2e8f0",padding:"1rem",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
@@ -433,10 +514,12 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
                 onChange={e=>setTmpKeys(k=>({...k,[field]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
-          <button disabled={!tmpKeys.anthropic} onClick={()=>{ saveKeys(tmpKeys); setKeys(tmpKeys); setKeysSet(true); }}
-            style={{...primaryBtn,width:"100%",textAlign:"center",opacity:tmpKeys.anthropic?1:0.5,marginTop:4}}>
+          {(()=>{ const need = config.minimal ? tmpKeys.td : tmpKeys.anthropic; return (
+          <button disabled={!need} onClick={()=>{ saveKeys(tmpKeys); setKeys(tmpKeys); setKeysSet(true); }}
+            style={{...primaryBtn,width:"100%",textAlign:"center",opacity:need?1:0.5,marginTop:4}}>
             Save Keys & Continue ↗
-          </button>
+          </button> ); })()}
+          {config.minimal && <p style={{fontSize:9,color:"#475569",textAlign:"center",margin:"6px 0 0"}}>Only the Twelve Data key is required — the signal runs free & locally. Add the Anthropic key only if you want the optional AI news check.</p>}
         </div>
       )}
 

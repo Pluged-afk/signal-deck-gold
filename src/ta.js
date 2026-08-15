@@ -531,7 +531,7 @@ export const analyzeTimeframes = ({ c15, c1h, c4h, c1d, c4hTimes, price, atr4h, 
 // Everything else is NO-TRADE or WAIT, with the exact failing reason. Ranging (weak
 // ADX) does NOT hard-block — it only adds a size-down note. Pass `confidence` from a
 // live signal (omit for the free scan, which has no AI call) and `gate` = eventGate().
-export const tradeVerdict = (ta, { confidence = null, gate = null, action = null } = {}) => {
+export const tradeVerdict = (ta, { confidence = null, gate = null, action = null, tierThreshold = 2 } = {}) => {
   const checks = [];
   const push = (k, ok, note) => checks.push({ k, ok, note });
   const adxS = ta && ta.adx != null ? ta.adx.toFixed(0) : "n/a";
@@ -549,8 +549,11 @@ export const tradeVerdict = (ta, { confidence = null, gate = null, action = null
     // was analysed, so it must not read as a red "NO-TRADE" (which means "analysed, skip").
     return { verdict: "DATA ERROR", headline: "Couldn't load candle data", reason: "The price-data provider didn't return the daily candles — usually a per-minute API-limit hit. The tier couldn't be computed, so there's nothing to grade. This is a data hiccup, NOT a trade decision — wait ~60s and re-scan.", checks: [] };
   }
-  const tierOK = ta.htfTier >= 2;
-  push("Tier ≥ 2", tierOK, `tier ${ta.htfTier}/3${tierOK ? " — daily-confirmed trend" : ta.htfTier === 0 ? " — daily dissents (negative expectancy)" : " — daily only (marginal)"}`);
+  // Threshold is the learning system's ONE adaptable knob (clamped 1–3 in shared.jsx;
+  // tier 0 = daily dissents is proven −EV and can never pass). Default 2.
+  const thr = (tierThreshold === 1 || tierThreshold === 3) ? tierThreshold : 2;
+  const tierOK = ta.htfTier >= thr;
+  push(`Tier ≥ ${thr}`, tierOK, `tier ${ta.htfTier}/3${tierOK ? " — daily-confirmed trend" : ta.htfTier === 0 ? " — daily dissents (negative expectancy)" : " — daily only (below the current gate)"}`);
   // Confidence sets SIZE, not a veto: the tier is the proven edge (55-62% win at
   // tier 2-3, independent of the AI's confidence — which is unproven as a win-rate
   // predictor). A clean tier-2+ therefore trades regardless of confidence; LOW just
@@ -559,16 +562,42 @@ export const tradeVerdict = (ta, { confidence = null, gate = null, action = null
   const conviction = (confU === "HIGH" || confU === "VERY HIGH") ? "high" : confU === "LOW" ? "low" : "normal";
   push("Not chasing", !ta.extended, ta.extended ? `extended ${ta.recentMoveATR.toFixed(1)}×ATR — wait for a pullback` : "entry not extended");
   push("Trend present", !ta.ranging, ta.ranging ? `ADX ${adxS} — ranging` : `ADX ${adxS}`);
-  if (!tierOK) return { verdict: "NO-TRADE", headline: "Below quality bar", reason: ta.htfTier === 0 ? "Tier 0 — the daily does not confirm the 4h. Negative expectancy. Hold out for a tier-2+ setup." : "Tier 1 — only the daily confirms (1h & weekly dissent). Marginal; wait for tier 2+.", checks };
+  if (!tierOK) return { verdict: "NO-TRADE", headline: "Below quality bar", reason: ta.htfTier === 0 ? "Tier 0 — the daily does not confirm the 4h. Negative expectancy (locked out — never tradeable)." : `Tier ${ta.htfTier} — below the tier-${thr} gate (daily confirms, but ${3 - ta.htfTier} of 1h/weekly don't). Wait for tier ${thr}+.`, checks };
   if (ta.extended) return { verdict: "WAIT", headline: "Extended — don't chase", reason: `Price ran ${ta.recentMoveATR.toFixed(1)}×ATR in the last ~12h. Entering here is chasing (tested: −0.05R). Wait for a pullback to the level, then take it.`, checks };
   // Size: LOW confidence → half, ranging → ×0.75; MEDIUM+ non-ranging → full.
   let sizeMult = conviction === "low" ? 0.5 : 1.0;
+  // Tier 1 (daily-only) is +EV but lower-conviction than tier 2/3, so when the
+  // learning gate allows it, it trades at REDUCED size — it never gets full size.
+  if (ta.htfTier === 1) sizeMult = Math.min(sizeMult, 0.5);
   if (ta.ranging) sizeMult = Math.round(sizeMult * 0.75 * 100) / 100;
   if (confidence != null) push("Confidence → size", true, `${confU} → ${sizeMult < 1 ? Math.round(sizeMult * 100) + "% size" : "full size"}`);
-  const bits = []; if (conviction === "low") bits.push("LOW confidence"); if (ta.ranging) bits.push("ranging");
+  const bits = []; if (conviction === "low") bits.push("LOW confidence"); if (ta.htfTier === 1) bits.push("tier 1 daily-only"); if (ta.ranging) bits.push("ranging");
   const sizeTxt = sizeMult < 1 ? ` ${bits.join(" + ")} → trade at ${Math.round(sizeMult * 100)}% size.` : "";
   const headline = conviction === "low" ? `Tradeable · tier ${ta.htfTier}/3 · low conviction` : `Quality setup · tier ${ta.htfTier}/3`;
   return { verdict: "TRADE", headline, reason: `Daily-confirmed, entry not extended.${sizeTxt}`, conviction, sizeMult, checks };
+};
+
+// ─── FREE local signal (no AI) — the default path (2026-08-15) ───────────────
+// Builds a complete TRADE/NO-TRADE signal from the locally-computed `ta` alone:
+// direction = the 4h trend, levels = the VALIDATED formula (market entry, 1.5×ATR
+// stop, tier-scaled 1R/2R targets — the ones the backtest showed beat every
+// alternative). No news, no reasoning, no Anthropic call, €0. The optional AI
+// "news check" can still be run on top for live-catalyst context.
+export const localSignal = (ta, price, decimals = 2, tierThreshold = 2) => {
+  const dec = decimals, fnum = v => v == null ? null : (+v).toFixed(dec);
+  const side = ta.t4 === "BULL" ? "LONG" : ta.t4 === "BEAR" ? "SHORT" : "WAIT";
+  let entry = null, stop = null, t1 = null, t2 = null;
+  if (side !== "WAIT" && price > 0 && ta.atr4h > 0 && ta.htfTier != null) {
+    const risk = 1.5 * ta.atr4h, d = side === "SHORT" ? -1 : 1;
+    const t1m = ta.htfTier >= 1 ? 1.0 : 0.75, t2m = ta.htfTier >= 1 ? 2.0 : 1.5;
+    entry = fnum(price); stop = fnum(price - d * risk); t1 = fnum(price + d * t1m * risk); t2 = fnum(price + d * t2m * risk);
+  }
+  return {
+    action: side, price: String(price), entry, stop, t1, t2,
+    confidence: ta.htfTier === 3 ? "HIGH" : ta.htfTier >= 1 ? "MEDIUM" : "LOW",
+    _ta: ta, _htfTier: ta.htfTier, _free: true, _sources: ["Local compute · no AI"],
+    _confReason: "free local read — tier + technicals only, no live news",
+  };
 };
 
 // ─── signal-quality score 0–100 (scorecard PASSes + local bonuses) ──────────

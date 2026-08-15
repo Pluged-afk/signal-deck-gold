@@ -569,6 +569,94 @@ export const journalStats = () => {
   return { total: all.length, closed: closed.length, wins, losses, be, winRate: closed.length ? Math.round(100 * wins / (wins + losses || 1)) : null, followedPct: all.length ? Math.round(100 * followed / all.length) : null };
 };
 
+// ─── Shadow log (2026-08-15) — the "recorder" for the deferred learning loop ──
+// Records the HYPOTHETICAL entry/SL/TP of EVERY signal, incl. NO-TRADE, at signal
+// time (levels are unrecoverable later), then resolves the outcome AUTOMATICALLY
+// from candles (did SL or TP1 hit first?). Purpose: measure FALSE NEGATIVES — the
+// setups the tier≥2 gate rejected that would have won — so certain NO-TRADE
+// patterns can be shown, over time, to be tradeable. NEVER influences a signal;
+// evidence only, to be promoted (if ever) via the non-overlapping resample bar.
+// Levels use the engine's own rule: stop = 1.5×ATR (=1R); tier≥1 → T1 1R/T2 2R;
+// tier 0 → T1 0.75R/T2 1.5R. All local — zero AI cost.
+export const SHADOW_KEY = "sdg_shadow";
+export const getShadows = () => { try { return JSON.parse(localStorage.getItem(SHADOW_KEY) || "[]"); } catch (_) { return []; } };
+const saveShadows = a => { try { localStorage.setItem(SHADOW_KEY, JSON.stringify(a.slice(-400))); } catch (_) {} };
+export const shadowLevels = (side, entry, atr, tier) => {
+  if (!(entry > 0) || !(atr > 0)) return null;
+  const risk = 1.5 * atr, d = side === "SHORT" ? -1 : 1;
+  const t1m = (tier ?? 0) >= 1 ? 1.0 : 0.75, t2m = (tier ?? 0) >= 1 ? 2.0 : 1.5;
+  return { entry: +entry, sl: +(entry - d * risk), tp1: +(entry + d * t1m * risk), tp2: +(entry + d * t2m * risk), risk: +risk };
+};
+// De-dupes to ONE record per asset per 4h bar (a mid-bar re-scan/refresh returns
+// the same read, so it must not create duplicate shadow rows).
+export const addShadow = rec => {
+  try {
+    if (!rec || !rec.side || !(rec.entry > 0) || !(rec.sl > 0) || !(rec.tp1 > 0)) return getShadows();
+    const a = getShadows(), bar = Math.floor(Date.now() / (4 * 3600000));
+    if (a.some(r => r.asset === rec.asset && Math.floor(r.ts / (4 * 3600000)) === bar)) return a;
+    a.push({ id: Date.now(), ts: Date.now(), outcome: "open", ...rec });
+    saveShadows(a); return a;
+  } catch (_) { return getShadows(); }
+};
+export const updateShadow = (id, patch) => { try { const a = getShadows().map(r => r.id === id ? { ...r, ...patch } : r); saveShadows(a); return a; } catch (_) { return getShadows(); } };
+// Auto-resolve open records from 4h candles ([{t:sec,o,h,l,c}] ascending). Same-bar
+// SL+TP ambiguity → counts SL (conservative, never inflates the shadow win-rate).
+export const resolveShadows = (bars, horizonBars = 12) => {
+  if (!bars || !bars.length) return getShadows();
+  const a = getShadows(); let changed = false;
+  for (const r of a) {
+    if (r.outcome !== "open") continue;
+    const start = Math.floor(r.ts / 1000);
+    const fwd = bars.filter(b => b.t >= start).slice(0, horizonBars);
+    if (!fwd.length) continue;
+    const long = r.side !== "SHORT"; let hit = null;
+    for (const b of fwd) {
+      const hitSL = long ? b.l <= r.sl : b.h >= r.sl;
+      const hitTP = long ? b.h >= r.tp1 : b.l <= r.tp1;
+      if (hitSL) { hit = "sl"; break; }          // SL checked first = conservative
+      if (hitTP) { hit = "tp1"; break; }
+    }
+    if (hit) { r.outcome = hit; r.resolvedAt = Date.now(); r.resolvedBy = "auto"; changed = true; }
+    else if (fwd.length >= horizonBars) { r.outcome = "expired"; r.resolvedAt = Date.now(); r.resolvedBy = "auto"; changed = true; }
+  }
+  if (changed) saveShadows(a);
+  return a;
+};
+// Split shadow win-rate by TRADE vs NO-TRADE — the headline false-negative read.
+export const shadowStats = () => {
+  const by = { TRADE: { tp: 0, sl: 0 }, "NO-TRADE": { tp: 0, sl: 0 } };
+  for (const r of getShadows()) {
+    if (r.outcome !== "tp1" && r.outcome !== "sl") continue;
+    const k = r.verdict === "TRADE" ? "TRADE" : "NO-TRADE";
+    if (r.outcome === "tp1") by[k].tp++; else by[k].sl++;
+  }
+  const rate = g => (g.tp + g.sl) ? Math.round(100 * g.tp / (g.tp + g.sl)) : null;
+  return { trade: { ...by.TRADE, rate: rate(by.TRADE) }, noTrade: { ...by["NO-TRADE"], rate: rate(by["NO-TRADE"]) } };
+};
+
+// ─── Gate override (2026-08-15) — the learning system's ONE adaptable knob ────
+// The daily-confirm requirement, the 1.5×ATR stop and the tier-scaled targets are
+// HARD-LOCKED (proven, never adapted). The only thing the learning loop may move
+// is the tier THRESHOLD at which a setup is shown as TRADE — and even that is
+// clamped to [1,3] so it can NEVER enable tier 0 (daily dissents = proven −EV).
+// Every change is logged + reversible; `resetGateOverride` restores the default.
+export const GATE_KEY = "sdg_gate";
+export const getGateOverride = () => { try { return JSON.parse(localStorage.getItem(GATE_KEY) || "{}"); } catch (_) { return {}; } };
+export const gateThreshold = () => { const t = getGateOverride().tierThreshold; return (t === 1 || t === 2 || t === 3) ? t : 2; };
+export const setGateOverride = (patch, note, by = "manual") => {
+  try {
+    const cur = getGateOverride();
+    if (patch.tierThreshold != null) patch.tierThreshold = Math.max(1, Math.min(3, patch.tierThreshold)); // clamp: never tier 0
+    const g = { ...cur, ...patch, updatedAt: Date.now() };
+    g.log = [...(cur.log || []), { ts: Date.now(), patch: { ...patch }, note, by }].slice(-40);
+    localStorage.setItem(GATE_KEY, JSON.stringify(g));
+    return g;
+  } catch (_) { return getGateOverride(); }
+};
+export const resetGateOverride = () => { const cur = getGateOverride(); try { localStorage.setItem(GATE_KEY, JSON.stringify({ log: [...(cur.log || []), { ts: Date.now(), patch: { tierThreshold: 2 }, note: "reset to default", by: "manual" }].slice(-40) })); } catch (_) {} return getGateOverride(); };
+export const getLearnSettings = () => { try { return { autoApply: false, ...JSON.parse(localStorage.getItem("sdg_learn") || "{}") }; } catch (_) { return { autoApply: false }; } };
+export const setLearnSettings = p => { try { const s = { ...getLearnSettings(), ...p }; localStorage.setItem("sdg_learn", JSON.stringify(s)); return s; } catch (_) { return getLearnSettings(); } };
+
 // ─── Scan-All persistence (2026-07-30) ───────────────────────────────────────
 // The free tier read is stable within a 4h bar (tier is daily-anchored; the 4h trend
 // only updates on a 4h close), so cache the last Scan All and show it on every page

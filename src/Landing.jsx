@@ -1,22 +1,24 @@
 import { useState, useRef, useEffect } from "react";
 import { mono, card, isWeekend, loadKeys, useNow, TD_FREE_DAILY, dailyMeter, upcomingEvents, eventGate, hmLeft, saveScans, loadScans, next4hBoundaryMs } from "./shared";
 import { fetchLiveCalendar, upcomingLive } from "./calendar";
-import { ASSETS } from "./assets";
+import { ASSETS, ENABLED_ASSETS } from "./assets";
 
 // Recommended free-scan times — the 4h closes that land in a good session (skip the
 // dead 00/04 UTC Asian closes). Egypt = UTC+3.
 const SCAN_TIMES = [
-  { utc: "08:00 UTC", egy: "11:00 AM", who: "Gold · GBP — London open" },
-  { utc: "12:00 UTC", egy: "3:00 PM",  who: "All — into NY session" },
-  { utc: "16:00 UTC", egy: "7:00 PM",  who: "All — EU/US overlap (best)" },
-  { utc: "20:00 UTC", egy: "11:00 PM", who: "BTC — US session" },
+  { utc: "08:00 UTC", egy: "11:00 AM", who: "London open — high volume" },
+  { utc: "12:00 UTC", egy: "3:00 PM",  who: "Into the NY session" },
+  { utc: "16:00 UTC", egy: "7:00 PM",  who: "EU/US overlap — best" },
 ];
 // next 4h candle close (00/04/08/12/16/20 UTC) from a live clock
 const nextClose = now => { const nh = (Math.floor(now.getUTCHours() / 4) + 1) * 4; const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)); d.setUTCHours(nh); return d; };
 const egyHour = utcH => { const e = (utcH + 3) % 24; return `${e % 12 || 12}:00 ${e >= 12 ? "PM" : "AM"}`; };
 
 // Asset selection — no signals run here. Picking a card mounts ONE engine.
-const CARDS = [
+// ALL_CARDS defines every engine ever built; CARDS is filtered to the currently
+// ENABLED_ASSETS (Gold-only as of 2026-08-15). GBP/BTC definitions are retained
+// so re-enabling them in assets.jsx immediately restores their card here.
+const ALL_CARDS = [
   {
     id:"gold", name:"GOLD", symbol:"XAU/USD",
     accent:"#ca8a04", accentText:"#fbbf24", glyph:"✦",
@@ -42,6 +44,7 @@ const CARDS = [
     weekendRating:"good",
   },
 ];
+const CARDS = ALL_CARDS.filter(c => ENABLED_ASSETS.includes(c.id));
 
 const ratingCol = r => r==="good"?"#4ade80":r==="fair"?"#fbbf24":"#f87171";
 
@@ -80,7 +83,7 @@ export default function Landing({ onSelect }) {
     const keys = loadKeys();
     const all = await fetchLiveCalendar().catch(() => null);
     setLiveCal(!!all);   // null = live feed unreachable → fell back to the estimate (fail-safe warns)
-    const ids = ["gold", "gbp", "btc"];
+    const ids = ENABLED_ASSETS;
     const results = await Promise.all(ids.map(id => {
       const cfg = ASSETS[id];
       const evs = all ? upcomingLive(all, cfg.eventCurrencies || ["USD"]) : upcomingEvents(cfg.events || []);
@@ -108,7 +111,10 @@ export default function Landing({ onSelect }) {
       if (good.length) try { new Notification("Signal Deck — worth a look", { body: good.map(id => `${id.toUpperCase()}: ${map[id].revFade?.active || map[id].rangeFade?.active ? "FADE setup" : "tier " + map[id].tier}`).join(" · ") }); } catch (_) {}
     }
     const ts = Date.now();
-    setScans(map); setScanTs(new Date(ts)); saveScans(map, ts); lastScanAtRef.current = ts; setScanning(false); scanningRef.current = false;
+    // Persist a LEAN copy — the free-signal `ta` object (large: arrays for fib/sr/
+    // patterns) is only needed in-memory by the engine, never by the landing display.
+    const leanMap = {}; for (const id in map) { const { ta, ...rest } = map[id] || {}; leanMap[id] = rest; }
+    setScans(map); setScanTs(new Date(ts)); saveScans(leanMap, ts); lastScanAtRef.current = ts; setScanning(false); scanningRef.current = false;
   };
 
   const toggleAuto = () => {
@@ -162,12 +168,12 @@ export default function Landing({ onSelect }) {
 
         <div style={{textAlign:"center",padding:"1.5rem 0 0.5rem"}}>
           <p style={{fontWeight:700,fontSize:22,letterSpacing:"0.14em",color:"#f1f5f9",margin:"0 0 4px"}}>✦ SIGNAL DECK</p>
-          <p style={{...mono,fontSize:11,color:"#475569",margin:0}}>Multi-asset signal terminal · Real APIs · Paper trading</p>
+          <p style={{...mono,fontSize:11,color:"#475569",margin:0}}>Gold (XAU/USD) signal terminal · Real APIs · Paper trading</p>
         </div>
 
         {wknd && (
           <div style={{...card,background:"#1c1408",border:"1px solid #78350f",margin:"1rem 0",textAlign:"center"}}>
-            <span style={{fontSize:11,color:"#fbbf24",...mono}}>⚠ Weekend — liquidity is thin. Each asset shows its own weekend trading guidance.</span>
+            <span style={{fontSize:11,color:"#fbbf24",...mono}}>⚠ Weekend — gold liquidity is thin and spreads widen. Weekend guidance is shown inside the engine.</span>
           </div>
         )}
 
@@ -176,8 +182,8 @@ export default function Landing({ onSelect }) {
         <div style={{...card,margin:"1.25rem 0 0.5rem",border:"1px solid #334155"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <div>
-              <p style={{fontSize:13,fontWeight:700,color:"#e2e8f0",margin:0}}>⚡ Free Scan — all assets</p>
-              <p style={{fontSize:10,color:"#64748b",margin:"2px 0 0"}}>Checks the higher-timeframe tier of all three for €0 (no AI). Only pay where it's tier 2+.</p>
+              <p style={{fontSize:13,fontWeight:700,color:"#e2e8f0",margin:0}}>⚡ Free Tier Scan</p>
+              <p style={{fontSize:10,color:"#64748b",margin:"2px 0 0"}}>Checks gold's higher-timeframe tier for €0 (no AI). Only pay when it's tier 2+.</p>
             </div>
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
               <button onClick={toggleAuto}
@@ -187,9 +193,9 @@ export default function Landing({ onSelect }) {
               </button>
               {(()=>{const cd=Math.max(0,Math.ceil((SCAN_COOLDOWN_MS-(+now-lastScanAtRef.current))/1000));const off=scanning||cd>0;return(
               <button onClick={()=>scanAll()} disabled={off}
-                title={cd>0?`Cooldown ${cd}s — the free data tier allows 8 calls/min and one scan uses 6, so scans are spaced ~60s apart to never hit the limit.`:"Scan all three tiers for €0"}
+                title={cd>0?`Cooldown ${cd}s — the free data tier allows 8 calls/min and one scan uses 6, so scans are spaced ~60s apart to never hit the limit.`:"Scan gold's tier for €0"}
                 style={{padding:"8px 16px",background:"#1e293b",border:`1px solid ${off?"#334155":"#4ade80"}`,borderRadius:8,color:off?"#64748b":"#4ade80",fontSize:12,cursor:off?"default":"pointer",...mono,opacity:off?0.6:1}}>
-                {scanning?"Scanning…":cd>0?`⏳ ${cd}s`:"⚡ Scan All (free)"}
+                {scanning?"Scanning…":cd>0?`⏳ ${cd}s`:"⚡ Scan (free)"}
               </button>);})()}
             </div>
           </div>
@@ -290,7 +296,7 @@ export default function Landing({ onSelect }) {
         </div>
 
         <p style={{fontSize:10,color:"#334155",margin:0,lineHeight:1.5,borderTop:"1px solid #1e293b",paddingTop:"0.75rem"}}>
-          PAPER TRADING ONLY — Not financial advice. Each instrument has its own signal engine, scorecard and risk model. Only the selected asset runs.
+          PAPER TRADING ONLY — Not financial advice. Gold's signal engine, scorecard and risk model. No system eliminates losses.
         </p>
       </div>
     </div>
