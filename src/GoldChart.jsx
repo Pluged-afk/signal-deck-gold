@@ -48,7 +48,7 @@ export default function GoldChart({ keys, sig, decimals = 2, markers = [], level
   const volRef = useRef(null);
   const linesRef = useRef([]);       // price-line handles, cleared on each overlay update
   const markersRef = useRef(null);   // series-markers primitive
-  const [tf, setTf] = useState("4h");
+  const [tf, setTf] = useState("1h");
   const [bars, setBars] = useState(null);
   const [status, setStatus] = useState("init"); // init | loading | ok | nokey | error
   const [last, setLast] = useState(null);
@@ -186,7 +186,8 @@ export default function GoldChart({ keys, sig, decimals = 2, markers = [], level
 
       <div style={{ position: "relative", width: "100%", height: 320 }}>
         <div ref={wrapRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-        {status !== "ok" && (
+        {/* Full overlay ONLY when there are no candles to show yet. */}
+        {status !== "ok" && (!bars || !bars.length) && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 20 }}>
             <p style={{ ...mono, fontSize: 12, color: status === "nokey" ? "#fbbf24" : status === "error" ? "#f87171" : "#64748b", lineHeight: 1.6, margin: 0 }}>
               {status === "loading" && "Loading candles…"}
@@ -194,6 +195,12 @@ export default function GoldChart({ keys, sig, decimals = 2, markers = [], level
               {status === "nokey" && "Add your Twelve Data key on the landing page to load the live chart."}
               {status === "error" && (<>Couldn't load candles.<br /><span style={{ color: "#64748b", fontSize: 11 }}>Data API limit or the /api/data proxy isn't live yet. Tap ↻ to retry.</span></>)}
             </p>
+          </div>
+        )}
+        {/* Candles already loaded but a refresh failed/pending — small pill, never cover the chart. */}
+        {status !== "ok" && bars && bars.length > 0 && (
+          <div style={{ position: "absolute", top: 6, right: 6, ...mono, fontSize: 8, padding: "2px 6px", borderRadius: 5, background: "rgba(2,6,23,0.8)", color: status === "error" ? "#fbbf24" : "#64748b", border: "1px solid #1e293b" }}>
+            {status === "loading" ? "updating…" : "rate-limited · tap ↻"}
           </div>
         )}
       </div>
