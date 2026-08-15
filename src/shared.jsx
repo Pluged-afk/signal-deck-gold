@@ -587,6 +587,20 @@ export const shadowLevels = (side, entry, atr, tier) => {
   const t1m = (tier ?? 0) >= 1 ? 1.0 : 0.75, t2m = (tier ?? 0) >= 1 ? 2.0 : 1.5;
   return { entry: +entry, sl: +(entry - d * risk), tp1: +(entry + d * t1m * risk), tp2: +(entry + d * t2m * risk), risk: +risk };
 };
+// Structure-aware target (for the A/B test): the nearest S/R level sitting between
+// entry and the formula TP2 — where price would most likely stall. null if the path
+// is clear (then there's nothing to A/B on that signal). Never changes the live
+// levels; only logged alongside so the learning loop can MEASURE, over real
+// outcomes, whether structure-hugging targets actually beat the fixed formula.
+export const structureTP = (side, entry, sr, tp2) => {
+  if (!sr || !(entry > 0) || !(tp2 > 0)) return null;
+  const long = side !== "SHORT";
+  const cands = (long ? sr.resistance : sr.support) || [];
+  const lo = Math.min(entry, tp2), hi = Math.max(entry, tp2);
+  let best = null;
+  for (const c of cands) { const lv = c && c.level; if (!(lv > 0) || lv <= lo || lv >= hi) continue; if (best == null || Math.abs(lv - entry) < Math.abs(best - entry)) best = lv; }
+  return best;
+};
 // De-dupes to ONE record per asset per 4h bar (a mid-bar re-scan/refresh returns
 // the same read, so it must not create duplicate shadow rows).
 export const addShadow = rec => {
@@ -605,19 +619,21 @@ export const resolveShadows = (bars, horizonBars = 12) => {
   if (!bars || !bars.length) return getShadows();
   const a = getShadows(); let changed = false;
   for (const r of a) {
-    if (r.outcome !== "open") continue;
+    const needF = r.outcome === "open";
+    const needS = r.tp1s > 0 && (r.outcomeS === "open" || r.outcomeS == null);
+    if (!needF && !needS) continue;
     const start = Math.floor(r.ts / 1000);
     const fwd = bars.filter(b => b.t >= start).slice(0, horizonBars);
     if (!fwd.length) continue;
-    const long = r.side !== "SHORT"; let hit = null;
+    const long = r.side !== "SHORT"; let f = null, s = null;
     for (const b of fwd) {
-      const hitSL = long ? b.l <= r.sl : b.h >= r.sl;
-      const hitTP = long ? b.h >= r.tp1 : b.l <= r.tp1;
-      if (hitSL) { hit = "sl"; break; }          // SL checked first = conservative
-      if (hitTP) { hit = "tp1"; break; }
+      const hitSL = long ? b.l <= r.sl : b.h >= r.sl;                 // SL checked first = conservative
+      if (f == null) { if (hitSL) f = "sl"; else if (long ? b.h >= r.tp1 : b.l <= r.tp1) f = "tp1"; }
+      if (s == null && r.tp1s > 0) { if (hitSL) s = "sl"; else if (long ? b.h >= r.tp1s : b.l <= r.tp1s) s = "tp1s"; }
+      if (f != null && (!(r.tp1s > 0) || s != null)) break;
     }
-    if (hit) { r.outcome = hit; r.resolvedAt = Date.now(); r.resolvedBy = "auto"; changed = true; }
-    else if (fwd.length >= horizonBars) { r.outcome = "expired"; r.resolvedAt = Date.now(); r.resolvedBy = "auto"; changed = true; }
+    if (needF) { if (f != null) { r.outcome = f; r.resolvedAt = Date.now(); r.resolvedBy = "auto"; changed = true; } else if (fwd.length >= horizonBars) { r.outcome = "expired"; r.resolvedAt = Date.now(); r.resolvedBy = "auto"; changed = true; } }
+    if (needS) { if (s != null) { r.outcomeS = s; changed = true; } else if (fwd.length >= horizonBars) { r.outcomeS = "expired"; changed = true; } }
   }
   if (changed) saveShadows(a);
   return a;
@@ -632,6 +648,20 @@ export const shadowStats = () => {
   }
   const rate = g => (g.tp + g.sl) ? Math.round(100 * g.tp / (g.tp + g.sl)) : null;
   return { trade: { ...by.TRADE, rate: rate(by.TRADE) }, noTrade: { ...by["NO-TRADE"], rate: rate(by["NO-TRADE"]) } };
+};
+// A/B: fixed-formula targets vs structure-aware targets, on the SAME signals (paired).
+// Reports both hit-rate AND mean-R (expectancy), because structure targets are closer
+// (higher hit rate) but smaller (lower reward) — only mean-R shows the real winner.
+export const abStats = () => {
+  const recs = getShadows().filter(r => r.tp1s > 0 && (r.outcome === "tp1" || r.outcome === "sl") && (r.outcomeS === "tp1s" || r.outcomeS === "sl"));
+  const n = recs.length;
+  if (!n) return { n: 0 };
+  const risk = r => Math.abs(r.entry - r.sl) || 1;
+  const fR = r => r.outcome === "tp1" ? Math.abs(r.tp1 - r.entry) / risk(r) : -1;
+  const sR = r => r.outcomeS === "tp1s" ? Math.abs(r.tp1s - r.entry) / risk(r) : -1;
+  const fTP = recs.filter(r => r.outcome === "tp1").length, sTP = recs.filter(r => r.outcomeS === "tp1s").length;
+  const mean = f => recs.reduce((a, r) => a + f(r), 0) / n;
+  return { n, formula: { hit: Math.round(100 * fTP / n), meanR: mean(fR) }, structure: { hit: Math.round(100 * sTP / n), meanR: mean(sR) } };
 };
 
 // ─── Gate override (2026-08-15) — the learning system's ONE adaptable knob ────
@@ -656,6 +686,9 @@ export const setGateOverride = (patch, note, by = "manual") => {
 export const resetGateOverride = () => { const cur = getGateOverride(); try { localStorage.setItem(GATE_KEY, JSON.stringify({ log: [...(cur.log || []), { ts: Date.now(), patch: { tierThreshold: 2 }, note: "reset to default", by: "manual" }].slice(-40) })); } catch (_) {} return getGateOverride(); };
 export const getLearnSettings = () => { try { return { autoApply: false, ...JSON.parse(localStorage.getItem("sdg_learn") || "{}") }; } catch (_) { return { autoApply: false }; } };
 export const setLearnSettings = p => { try { const s = { ...getLearnSettings(), ...p }; localStorage.setItem("sdg_learn", JSON.stringify(s)); return s; } catch (_) { return getLearnSettings(); } };
+// TRADE alerts (browser notification when a fresh setup becomes tradeable).
+export const getAlerts = () => { try { return { enabled: false, ...JSON.parse(localStorage.getItem("sdg_alerts") || "{}") }; } catch (_) { return { enabled: false }; } };
+export const setAlerts = p => { try { const s = { ...getAlerts(), ...p }; localStorage.setItem("sdg_alerts", JSON.stringify(s)); return s; } catch (_) { return getAlerts(); } };
 
 // ─── Scan-All persistence (2026-07-30) ───────────────────────────────────────
 // The free tier read is stable within a 4h bar (tier is daily-anchored; the 4h trend

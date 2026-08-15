@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   mono, card, lbl, fmt, inputStyle,
   aStyl, rStyl, cCol, sCol, qCol,
@@ -8,7 +8,7 @@ import {
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
   dailyMeter, bumpDaily, TD_FREE_DAILY, eventGate, hmLeft,
   lockSignal, signalLock, addTrade, getTrades, updateTrade, journalStats,
-  addShadow, shadowLevels, gateThreshold,
+  addShadow, shadowLevels, gateThreshold, structureTP, getAlerts, setAlerts,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -40,6 +40,8 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
   const [scanResult, setScanResult] = useState(null); // free tier-scan result (gate)
   const [scanning, setScanning] = useState(false);
   const [meter, setMeter] = useState(dailyMeter);     // daily paid/TD tracker
+  const [alerts, setAlertsState] = useState(() => getAlerts().enabled);
+  const alertBarRef = useRef(-1); const alertVerdictRef = useRef(null);
   const logRef = useRef([]);
   const usesTD = config.keyFields.some(f => f.field === "td");
   const TIER_GATE = 2; // hard-block the paid signal below this scanned tier
@@ -185,10 +187,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
           if(V==="TRADE" && parseFloat(parsed.entry)>0 && parseFloat(parsed.stop)>0){
             addShadow({ asset:config.id, verdict:"TRADE", reason:`tier ${ta?.htfTier}`, tier:ta?.htfTier, side,
               entry:parseFloat(parsed.entry), sl:parseFloat(parsed.stop), tp1:parseFloat(parsed.t1)||null, tp2:parseFloat(parsed.t2)||null,
-              risk:Math.abs(parseFloat(parsed.entry)-parseFloat(parsed.stop))||null });
+              risk:Math.abs(parseFloat(parsed.entry)-parseFloat(parsed.stop))||null, tp1s:structureTP(side, parseFloat(parsed.entry), ta?.sr, parseFloat(parsed.t2)) });
           } else {
             const lv = shadowLevels(side, parseFloat(parsed.price), ta?.atr4h, ta?.htfTier);
-            if(lv) addShadow({ asset:config.id, verdict:V||"NO-TRADE", reason:parsed._verdict?.headline||`tier ${ta?.htfTier}`, tier:ta?.htfTier, side, ...lv });
+            if(lv) addShadow({ asset:config.id, verdict:V||"NO-TRADE", reason:parsed._verdict?.headline||`tier ${ta?.htfTier}`, tier:ta?.htfTier, side, ...lv, tp1s:structureTP(side, lv.entry, ta?.sr, lv.tp2) });
           }
         }
       }catch(_){}
@@ -287,10 +289,10 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         const side = parsed.action==="LONG"?"LONG":parsed.action==="SHORT"?"SHORT":null;
         if(side){
           if(V==="TRADE" && parseFloat(parsed.entry)>0){
-            addShadow({ asset:config.id, verdict:"TRADE", reason:`tier ${ta.htfTier}`, tier:ta.htfTier, side, entry:parseFloat(parsed.entry), sl:parseFloat(parsed.stop), tp1:parseFloat(parsed.t1)||null, tp2:parseFloat(parsed.t2)||null, risk:Math.abs(parseFloat(parsed.entry)-parseFloat(parsed.stop))||null });
+            addShadow({ asset:config.id, verdict:"TRADE", reason:`tier ${ta.htfTier}`, tier:ta.htfTier, side, entry:parseFloat(parsed.entry), sl:parseFloat(parsed.stop), tp1:parseFloat(parsed.t1)||null, tp2:parseFloat(parsed.t2)||null, risk:Math.abs(parseFloat(parsed.entry)-parseFloat(parsed.stop))||null, tp1s:structureTP(side, parseFloat(parsed.entry), ta.sr, parseFloat(parsed.t2)) });
           } else {
             const lv = shadowLevels(side, scan.price, ta.atr4h, ta.htfTier);
-            if(lv) addShadow({ asset:config.id, verdict:V||"NO-TRADE", reason:parsed._verdict?.headline||`tier ${ta.htfTier}`, tier:ta.htfTier, side, ...lv });
+            if(lv) addShadow({ asset:config.id, verdict:V||"NO-TRADE", reason:parsed._verdict?.headline||`tier ${ta.htfTier}`, tier:ta.htfTier, side, ...lv, tp1s:structureTP(side, lv.entry, ta.sr, lv.tp2) });
           }
         }
       }catch(_){}
@@ -301,6 +303,41 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
     }catch(e){ setError(e.message||"Unknown error"); addLog(`ERROR: ${e.message}`); }
     finally{ setLoading(false); }
   }, [keys, config, events]);
+
+  // TRADE alerts — toggling requests notification permission; a silent free-scan
+  // verdict check (deduped to ONE per 4h bar) fires a browser notification when a
+  // fresh setup becomes a TRADE. €0 (free scan). Only while the tab is visible.
+  const toggleAlerts = useCallback(async () => {
+    const next = !getAlerts().enabled;
+    if(next && typeof Notification!=="undefined" && Notification.permission==="default"){ try{ await Notification.requestPermission(); }catch(_){} }
+    setAlerts({ enabled: next }); setAlertsState(next);
+  }, []);
+  useEffect(() => {
+    if(!config.minimal) return;
+    let alive = true;
+    const check = async () => {
+      if(!getAlerts().enabled || !keys.td) return;
+      if(typeof document!=="undefined" && document.visibilityState!=="visible") return;
+      const bar = Math.floor(Date.now()/(4*3600000));
+      if(alertBarRef.current === bar) return;                 // already checked this 4h bar
+      try{
+        const scan = await config.scan(keys);
+        if(!alive || !scan.ok || !scan.ta) return;
+        alertBarRef.current = bar;
+        const side = scan.t4==="BULL"?"LONG":scan.t4==="BEAR"?"SHORT":"WAIT";
+        const v = tradeVerdict(scan.ta, { action: side, gate: eventGate(events,24,30), tierThreshold: gateThreshold() });
+        if(v.verdict==="TRADE" && alertVerdictRef.current!=="TRADE"){
+          try{ if(typeof Notification!=="undefined" && Notification.permission==="granted") new Notification("Signal Deck · Gold — TRADE", { body:`${side} setup · tier ${scan.tier}/3 · open to see levels` }); }catch(_){}
+        }
+        alertVerdictRef.current = v.verdict;
+      }catch(_){}
+    };
+    check();
+    const id = setInterval(check, 10*60*1000);                // 10-min tick, deduped to 1 scan/4h bar
+    const onVis = () => { if(typeof document!=="undefined" && document.visibilityState==="visible") check(); };
+    if(typeof document!=="undefined") document.addEventListener("visibilitychange", onVis);
+    return () => { alive=false; clearInterval(id); if(typeof document!=="undefined") document.removeEventListener("visibilitychange", onVis); };
+  }, [config, keys, alerts, events]);
 
   const as = sig?aStyl(sig.action):{};
   const sc = sig?.scorecard||{};
@@ -327,6 +364,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
         error={error} tdWarn={tdWarn} now={now} meter={meter} costN={costN}
         onSignal={() => computeFreeSignal()} onScan={() => scanOnly()}
         onAICheck={() => fetchSignal()} hasAI={!!keys.anthropic}
+        alerts={alerts} onToggleAlerts={toggleAlerts}
         onKeys={() => setKeysSet(false)} onBack={onBack}
         onAckTD={() => attemptSignal({ ackTD: true })}
       />

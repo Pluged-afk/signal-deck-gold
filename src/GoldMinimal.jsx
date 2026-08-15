@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { mono, card, lotSizeFor, signalLock, hmLeft, EST_COST, EST_COST_HIGH, TD_FREE_DAILY, tdFetch, getShadows, resolveShadows, updateShadow, shadowStats, getGateOverride, setGateOverride, resetGateOverride, getLearnSettings, setLearnSettings } from "./shared";
+import { mono, card, lotSizeFor, signalLock, hmLeft, EST_COST, EST_COST_HIGH, TD_FREE_DAILY, tdFetch, getShadows, resolveShadows, updateShadow, shadowStats, abStats, getGateOverride, setGateOverride, resetGateOverride, getLearnSettings, setLearnSettings } from "./shared";
 import { learningReport, readyProposals, TIER_PRIOR } from "./learning";
 import { PULLBACK_ZONES } from "./ta";
 import GoldChart from "./GoldChart";
@@ -197,6 +197,32 @@ function CollectiveRead({ ta }) {
   );
 }
 
+// ── Targets A/B — fixed formula vs structure-capped, measured on real outcomes.
+function ABCard({ ab }) {
+  if (!ab || !ab.n) return (
+    <div style={{ ...card, marginBottom: 10 }}>
+      <p style={{ fontSize: 10, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase", margin: "0 0 4px" }}>⚖ Targets A/B · formula vs structure</p>
+      <p style={{ ...mono, fontSize: 10, color: "#475569", margin: 0, lineHeight: 1.5 }}>No paired outcomes yet. When a signal has a support/resistance level in its target path, both the fixed 1R/2R target and a structure-capped one are logged; once resolved from candles, this compares them.</p>
+    </div>
+  );
+  const col = m => m >= 0 ? "#22c55e" : "#f87171";
+  const structBetter = ab.structure.meanR > ab.formula.meanR;
+  const Row = ({ label, g, best }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #1e293b" }}>
+      <span style={{ fontSize: 11, color: best ? "#e2e8f0" : "#94a3b8" }}>{best ? "◆ " : "   "}{label}</span>
+      <span style={{ ...mono, fontSize: 10, color: "#cbd5e1" }}>{g.hit}% hit · <span style={{ color: col(g.meanR) }}>{g.meanR >= 0 ? "+" : ""}{g.meanR.toFixed(2)}R</span></span>
+    </div>
+  );
+  return (
+    <div style={{ ...card, marginBottom: 10 }}>
+      <p style={{ fontSize: 10, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase", margin: "0 0 6px" }}>⚖ Targets A/B · formula vs structure <span style={{ color: "#475569" }}>· n={ab.n}</span></p>
+      <Row label="Fixed formula (1R / 2R)" g={ab.formula} best={!structBetter} />
+      <Row label="Structure-capped target" g={ab.structure} best={structBetter} />
+      <p style={{ fontSize: 8, color: "#334155", margin: "6px 0 0", lineHeight: 1.5 }}>Structure targets hit MORE often but pay LESS — only <b style={{ color: "#64748b" }}>mean-R</b> (expectancy) names the winner. Live levels stay on the fixed formula; this only measures whether switching would help. Trust it past ~30 paired outcomes.</p>
+    </div>
+  );
+}
+
 // ── Learning — the disciplined adaptation brain (read-only until a pattern clears)
 const pctf = r => r == null ? "—" : `${Math.round(r * 100)}%`;
 function LearnSection({ report, gate, autoApply, onApply, onResetGate, onToggleAuto }) {
@@ -249,7 +275,7 @@ function LearnSection({ report, gate, autoApply, onApply, onResetGate, onToggleA
 
 export default function GoldMinimal({
   config, T, keys, sig, scanResult, loading, prechecking, scanning, error, tdWarn,
-  now, meter, costN, onSignal, onScan, onAICheck, hasAI, onKeys, onBack, onAckTD,
+  now, meter, costN, onSignal, onScan, onAICheck, hasAI, alerts, onToggleAlerts, onKeys, onBack, onAckTD,
 }) {
   const dec = config.decimals || 2;
   const ta = sig?._ta;
@@ -281,6 +307,7 @@ export default function GoldMinimal({
   const [gate, setGate] = useState(() => getGateOverride());
   const [autoApply, setAutoApply] = useState(() => getLearnSettings().autoApply);
   const report = learningReport(shadows, gate);
+  const ab = abStats();
   const applyProposal = p => setGate(setGateOverride(p.target, p.title, "manual"));
   const resetGate = () => setGate(resetGateOverride());
   const toggleAuto = () => setAutoApply(setLearnSettings({ autoApply: !autoApply }).autoApply);
@@ -338,6 +365,7 @@ export default function GoldMinimal({
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {config.scan && <button onClick={onScan} disabled={busy} style={ghostBtn} title="Free tier scan — no API cost">{scanning ? "…" : "⚡ Scan"}</button>}
+            <button onClick={onToggleAlerts} style={{ ...ghostBtn, ...(alerts ? { borderColor: "#22c55e", color: "#22c55e" } : {}) }} title="TRADE alerts — a browser notification when a fresh setup becomes tradeable. Free (checks once per 4h bar while this tab is open).">{alerts ? "🔔" : "🔕"}</button>
             <button onClick={() => setShowLog(v => !v)} style={{ ...ghostBtn, ...(showLog ? { borderColor: "#475569", color: "#e2e8f0" } : {}) }} title="Signal log — shadow TRADE/NO-TRADE outcomes tracked over time">📓{openCount ? ` ${openCount}` : ""}</button>
             <button onClick={onKeys} style={ghostBtn}>⚙</button>
           </div>
@@ -361,8 +389,9 @@ export default function GoldMinimal({
           )}
         </div>
 
-        {/* Learning + signal log (opt-in) */}
+        {/* Learning + A/B + signal log (opt-in) */}
         {showLog && <LearnSection report={report} gate={gate} autoApply={autoApply} onApply={applyProposal} onResetGate={resetGate} onToggleAuto={toggleAuto} />}
+        {showLog && <ABCard ab={ab} />}
         {showLog && <LogPanel shadows={shadows} stats={stats} onMark={markOutcome} onClose={() => setShowLog(false)} dec={dec} />}
 
         {/* Live chart with entry / SL / TP overlays + structure levels */}
