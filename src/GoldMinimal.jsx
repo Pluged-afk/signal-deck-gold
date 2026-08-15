@@ -86,24 +86,37 @@ function Levels({ sig, dec }) {
   const eff = sig._verdict?.sizeMult && sig._verdict.sizeMult < 1 ? sig._verdict.sizeMult : 1;
   const ps = lotSizeFor("gold", risk, acct * (riskPct * eff) / 100);
   const dirCol = sig.action === "LONG" ? "#22c55e" : "#f87171";
+  const atr = sig._ta && sig._ta.atr4h > 0 ? sig._ta.atr4h : null;
 
-  const Row = ({ label, price, r, col }) => (
-    <div style={{ display: "grid", gridTemplateColumns: "58px 1fr auto", gap: 8, alignItems: "baseline", padding: "8px 0", borderBottom: "1px solid #1e293b" }}>
-      <span style={{ fontSize: 11, fontWeight: 700, color: col, letterSpacing: "0.05em" }}>{label}</span>
-      <span style={{ ...mono, fontSize: 17, color: "#f1f5f9" }}>{fp(price)}</span>
-      <span style={{ fontSize: 10, color: "#64748b", textAlign: "right" }}>{r != null ? `${r >= 0 ? "+" : ""}${r.toFixed(1)}R` : ""}</span>
-    </div>
-  );
+  // Distance-first: every level shows its $ gap from entry (+ ×ATR), because gold
+  // feeds differ (cTrader ≠ TradingView ≠ our feed) and the difference isn't even
+  // constant. The DISTANCES transfer to any feed; the absolute price does not.
+  const Row = ({ label, price, col, isEntry }) => {
+    const dist = price - entry, r = isEntry ? null : rMul(price);
+    const sub = isEntry
+      ? "at your platform's live price"
+      : `${dist >= 0 ? "+" : "−"}$${Math.abs(dist).toFixed(dec)}${atr ? ` · ${(Math.abs(dist) / atr).toFixed(1)}×ATR` : ""}`;
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "48px 1fr auto", gap: 8, alignItems: "center", padding: "7px 0", borderBottom: "1px solid #1e293b" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: col, letterSpacing: "0.05em" }}>{label}</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ ...mono, fontSize: 16, color: "#f1f5f9" }}>{fp(price)}</span>
+          <span style={{ ...mono, fontSize: 9, color: isEntry ? "#64748b" : col }}>{sub}</span>
+        </div>
+        <span style={{ ...mono, fontSize: 11, color: "#64748b", textAlign: "right" }}>{r != null ? `${r >= 0 ? "+" : ""}${r.toFixed(1)}R` : ""}</span>
+      </div>
+    );
+  };
   return (
     <div style={{ ...card, marginBottom: 10, border: `1px solid ${dirCol}55` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-        <span style={{ fontSize: 10, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>Trade Levels</span>
-        <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: dirCol }}>{sig.action}</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <span style={{ fontSize: 10, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>Trade Levels · {sig.action}</span>
+        <span style={{ ...mono, fontSize: 9, color: "#475569" }}>use the distances →</span>
       </div>
-      <Row label="ENTRY" price={entry} r={null} col="#e2e8f0" />
-      <Row label="SL" price={stop} r={-1} col="#f87171" />
-      {t1 != null && <Row label="TP1" price={t1} r={rMul(t1)} col="#22c55e" />}
-      {t2 != null && <Row label="TP2" price={t2} r={rMul(t2)} col="#16a34a" />}
+      <Row label="ENTRY" price={entry} col="#e2e8f0" isEntry />
+      <Row label="SL" price={stop} col="#f87171" />
+      {t1 != null && <Row label="TP1" price={t1} col="#22c55e" />}
+      {t2 != null && <Row label="TP2" price={t2} col="#16a34a" />}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
         <span style={{ ...mono, fontSize: 11, color: "#94a3b8" }}>
           Size: {ps && !ps.tooSmall ? <b style={{ color: "#e2e8f0" }}>{ps.lots.toFixed(2)} lots</b> : ps?.tooSmall ? <span style={{ color: "#f87171" }}>&lt; 0.01 lot</span> : "—"}
@@ -111,6 +124,9 @@ function Levels({ sig, dec }) {
         </span>
         <span style={{ ...mono, fontSize: 11, color: "#64748b" }}>{riskPct}% risk · €{Number(acct).toLocaleString()}</span>
       </div>
+      <p style={{ fontSize: 8, color: "#334155", margin: "8px 0 0", lineHeight: 1.5 }}>
+        Prices are our data feed's reference. Gold feeds differ slightly (and not by a fixed amount), so <b style={{ color: "#64748b" }}>enter at your own platform's live price and apply the $ distances / R above</b> — those hold on any feed. The stop width (1.5×ATR) and the 1R/2R targets are what matter, not the exact number.
+      </p>
     </div>
   );
 }
