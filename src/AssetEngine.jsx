@@ -8,7 +8,7 @@ import {
   useNow, utcClockStr, egyClockStr, signalProxyEnabled,
   dailyMeter, bumpDaily, TD_FREE_DAILY, eventGate, hmLeft,
   lockSignal, signalLock, addTrade, getTrades, updateTrade, journalStats,
-  addShadow, shadowLevels, gateThreshold, structureTP, getAlerts, setAlerts,
+  addShadow, shadowLevels, gateThreshold, structureTP, getAlerts, setAlerts, getMode,
 } from "./shared";
 import TACards from "./TACards";
 import WaitCard, { InvalidationCard, waitTypeMeta } from "./WaitCard";
@@ -281,7 +281,7 @@ export default function AssetEngine({ config, onBack, headerExtra }) {
       if(!scan.ok) throw new Error(scan.reason || "Couldn't fetch candles.");
       const ta = scan.ta;
       if(!ta) throw new Error("No technical data returned from the scan.");
-      const parsed = localSignal(ta, scan.price, config.decimals || 2, gateThreshold());
+      const parsed = localSignal(ta, scan.price, config.decimals || 2, gateThreshold(), getMode());
       try{ parsed._verdict = tradeVerdict(ta, { confidence: parsed.confidence, gate: eventGate(events, 24, 30), action: parsed.action, tierThreshold: gateThreshold() }); }catch(_){}
       // shadow recorder (same as the paid path)
       try{

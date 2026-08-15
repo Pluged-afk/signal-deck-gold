@@ -78,16 +78,32 @@ export default function GoldChart({ keys, sig, decimals = 2, markers = [], level
     return () => { try { chart.remove(); } catch (_) {} chartRef.current = null; candleRef.current = null; volRef.current = null; linesRef.current = []; markersRef.current = null; };
   }, []);
 
-  // ── fetch candles for the selected timeframe ────────────────────────────────
-  const load = useCallback(async () => {
+  // ── fetch candles for the selected timeframe (CACHED to spare the TD limit) ──
+  // Serve from localStorage while the cache still covers the CURRENT (forming) bar
+  // — the live Swissquote poll keeps that bar's tip fresh, so Twelve Data is only
+  // hit once a new bar has actually closed (or on a forced ↻). Cuts TD calls hard.
+  const load = useCallback(async (force = false) => {
     if (!hasKey) { setStatus("nokey"); return; }
+    const conf = TF.find(t => t.id === tf) || TF[1];
+    const periodMs = { "1h": 3600000, "4h": 14400000, "1day": 86400000 }[conf.interval] || 3600000;
+    const curBarSec = Math.floor(Date.now() / periodMs) * periodMs / 1000;   // start of the current bar
+    const cacheKey = `sdg_candles_${conf.id}`;
+    if (!force) {
+      try {
+        const c = JSON.parse(localStorage.getItem(cacheKey) || "null");
+        if (c && Array.isArray(c.bars) && c.bars.length && c.lastBar >= curBarSec) {
+          setBars(c.bars); setLast(c.bars[c.bars.length - 1]); setStatus("ok");
+          return;
+        }
+      } catch (_) {}
+    }
     setStatus("loading");
     try {
-      const conf = TF.find(t => t.id === tf) || TF[1];
       const d = await tdFetch(`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${conf.interval}&outputsize=${conf.size}&timezone=UTC&apikey=${keys.td}`);
       const b = toBars(d?.values);
       if (!b.length) { setStatus("error"); return; }
       setBars(b); setLast(b[b.length - 1]); setStatus("ok");
+      try { localStorage.setItem(cacheKey, JSON.stringify({ bars: b, lastBar: b[b.length - 1].time, ts: Date.now() })); } catch (_) {}
     } catch (_) { setStatus("error"); }
   }, [tf, hasKey, keys?.td]);
 
@@ -180,7 +196,7 @@ export default function GoldChart({ keys, sig, decimals = 2, markers = [], level
               border: `1px solid ${tf === t.id ? "#475569" : "#1e293b"}`,
             }}>{t.label}</button>
           ))}
-          <button onClick={load} title="Reload candles" style={{ ...mono, fontSize: 11, padding: "2px 7px", borderRadius: 6, cursor: "pointer", background: "transparent", color: "#64748b", border: "1px solid #1e293b" }}>↻</button>
+          <button onClick={() => load(true)} title="Force-reload candles (bypass cache)" style={{ ...mono, fontSize: 11, padding: "2px 7px", borderRadius: 6, cursor: "pointer", background: "transparent", color: "#64748b", border: "1px solid #1e293b" }}>↻</button>
         </div>
       </div>
 

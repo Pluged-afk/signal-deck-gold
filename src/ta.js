@@ -549,6 +549,13 @@ export const tradeVerdict = (ta, { confidence = null, gate = null, action = null
     // was analysed, so it must not read as a red "NO-TRADE" (which means "analysed, skip").
     return { verdict: "DATA ERROR", headline: "Couldn't load candle data", reason: "The price-data provider didn't return the daily candles — usually a per-minute API-limit hit. The tier couldn't be computed, so there's nothing to grade. This is a data hiccup, NOT a trade decision — wait ~60s and re-scan.", checks: [] };
   }
+  // Validated RANGE-FADE (mean-reversion in a no-trend range) is tradeable even at
+  // tier 0 — the edge here is fading TO the mean, not following a trend. Only present
+  // when rangeFadeEnabled AND its exact conditions are met (ADX<weak, daily≠4h,
+  // ≥0.30×ATR from the BB mid). Event/extended guards above still pre-empt it.
+  if (ta.rangeFade && ta.rangeFade.active) {
+    return { verdict: "TRADE", headline: `Range-fade · ${ta.rangeFade.dir}`, reason: "Ranging, no daily trend, stretched from the mean → validated mean-reversion fade back to the mean (gold p=0.034). LOW conviction, small capped target, half size.", conviction: "low", sizeMult: 0.5, checks };
+  }
   // Threshold is the learning system's ONE adaptable knob (clamped 1–3 in shared.jsx;
   // tier 0 = daily dissents is proven −EV and can never pass). Default 2.
   const thr = (tierThreshold === 1 || tierThreshold === 3) ? tierThreshold : 2;
@@ -577,25 +584,47 @@ export const tradeVerdict = (ta, { confidence = null, gate = null, action = null
   return { verdict: "TRADE", headline, reason: `Daily-confirmed, entry not extended.${sizeTxt}`, conviction, sizeMult, checks };
 };
 
+// ─── Execution-profile MODES (2026-08-15) ────────────────────────────────────
+// Same proven trend gate, different stop/target SCALE + hold. DAY is the validated
+// profile (1.5×ATR, 1R/2R). Scalp is tighter/faster; swing is wider/longer. These
+// change the RISK & HOLD, not the edge — the direction win-rate is the same trend
+// edge at every scale (see the in-app assessment). Not separately backtested.
+export const SIGNAL_MODES = {
+  scalp: { stopMult: 1.0, t1: 0.75, t2: 1.5, hold: "minutes–hours" },
+  day:   { stopMult: 1.5, t1: 1.0,  t2: 2.0, hold: "hours" },
+  swing: { stopMult: 2.5, t1: 1.0,  t2: 2.0, hold: "days" },
+};
+
 // ─── FREE local signal (no AI) — the default path (2026-08-15) ───────────────
-// Builds a complete TRADE/NO-TRADE signal from the locally-computed `ta` alone:
-// direction = the 4h trend, levels = the VALIDATED formula (market entry, 1.5×ATR
-// stop, tier-scaled 1R/2R targets — the ones the backtest showed beat every
-// alternative). No news, no reasoning, no Anthropic call, €0. The optional AI
-// "news check" can still be run on top for live-catalyst context.
-export const localSignal = (ta, price, decimals = 2, tierThreshold = 2) => {
+// Builds a complete TRADE/NO-TRADE signal from the locally-computed `ta` alone.
+// PRECEDENCE: an active range-fade (validated mean-reversion in a no-trend range)
+// wins; otherwise the trend trade — direction = 4h trend, levels = the selected
+// mode's stop/target scale. No news, no AI, €0.
+export const localSignal = (ta, price, decimals = 2, tierThreshold = 2, mode = "day") => {
   const dec = decimals, fnum = v => v == null ? null : (+v).toFixed(dec);
+  const M = SIGNAL_MODES[mode] || SIGNAL_MODES.day;
+  // Range-fade (only present when rangeFadeEnabled + conditions met) takes priority
+  // and uses ITS OWN validated levels (fade to BB mid, hard-capped) — mode does not
+  // rescale a fade.
+  if (ta.rangeFade && ta.rangeFade.active && price > 0) {
+    const f = ta.rangeFade;
+    return {
+      action: f.dir, price: String(price), entry: fnum(price), stop: fnum(f.stop), t1: fnum(f.target), t2: null,
+      confidence: "LOW", _ta: ta, _htfTier: ta.htfTier, _free: true, _fade: "range", _mode: mode,
+      _sources: ["Local · range-fade (mean-reversion)"],
+      _confReason: "range-fade — mean-reversion to the mean in a no-trend range (validated, LOW conviction)",
+    };
+  }
   const side = ta.t4 === "BULL" ? "LONG" : ta.t4 === "BEAR" ? "SHORT" : "WAIT";
   let entry = null, stop = null, t1 = null, t2 = null;
   if (side !== "WAIT" && price > 0 && ta.atr4h > 0 && ta.htfTier != null) {
-    const risk = 1.5 * ta.atr4h, d = side === "SHORT" ? -1 : 1;
-    const t1m = ta.htfTier >= 1 ? 1.0 : 0.75, t2m = ta.htfTier >= 1 ? 2.0 : 1.5;
-    entry = fnum(price); stop = fnum(price - d * risk); t1 = fnum(price + d * t1m * risk); t2 = fnum(price + d * t2m * risk);
+    const risk = M.stopMult * ta.atr4h, d = side === "SHORT" ? -1 : 1;
+    entry = fnum(price); stop = fnum(price - d * risk); t1 = fnum(price + d * M.t1 * risk); t2 = fnum(price + d * M.t2 * risk);
   }
   return {
     action: side, price: String(price), entry, stop, t1, t2,
     confidence: ta.htfTier === 3 ? "HIGH" : ta.htfTier >= 1 ? "MEDIUM" : "LOW",
-    _ta: ta, _htfTier: ta.htfTier, _free: true, _sources: ["Local compute · no AI"],
+    _ta: ta, _htfTier: ta.htfTier, _free: true, _mode: mode, _sources: ["Local compute · no AI"],
     _confReason: "free local read — tier + technicals only, no live news",
   };
 };

@@ -689,6 +689,9 @@ export const setLearnSettings = p => { try { const s = { ...getLearnSettings(), 
 // TRADE alerts (browser notification when a fresh setup becomes tradeable).
 export const getAlerts = () => { try { return { enabled: false, ...JSON.parse(localStorage.getItem("sdg_alerts") || "{}") }; } catch (_) { return { enabled: false }; } };
 export const setAlerts = p => { try { const s = { ...getAlerts(), ...p }; localStorage.setItem("sdg_alerts", JSON.stringify(s)); return s; } catch (_) { return getAlerts(); } };
+// Execution profile (scalp/day/swing). Config lives in ta.js SIGNAL_MODES.
+export const getMode = () => { try { const m = localStorage.getItem("sdg_mode"); return (m === "scalp" || m === "day" || m === "swing") ? m : "day"; } catch (_) { return "day"; } };
+export const setMode = m => { try { if (m === "scalp" || m === "day" || m === "swing") localStorage.setItem("sdg_mode", m); } catch (_) {} return getMode(); };
 
 // ─── Scan-All persistence (2026-07-30) ───────────────────────────────────────
 // The free tier read is stable within a 4h bar (tier is daily-anchored; the 4h trend

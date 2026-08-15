@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { mono, card, lotSizeFor, signalLock, hmLeft, EST_COST, EST_COST_HIGH, TD_FREE_DAILY, tdFetch, getShadows, resolveShadows, updateShadow, shadowStats, abStats, getGateOverride, setGateOverride, resetGateOverride, getLearnSettings, setLearnSettings } from "./shared";
+import { mono, card, lotSizeFor, signalLock, hmLeft, EST_COST, EST_COST_HIGH, TD_FREE_DAILY, tdFetch, getShadows, resolveShadows, updateShadow, shadowStats, abStats, getGateOverride, setGateOverride, resetGateOverride, getLearnSettings, setLearnSettings, getMode, setMode } from "./shared";
 import { learningReport, readyProposals, TIER_PRIOR } from "./learning";
-import { PULLBACK_ZONES } from "./ta";
+import { PULLBACK_ZONES, SIGNAL_MODES } from "./ta";
 import GoldChart from "./GoldChart";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -74,11 +74,20 @@ function PullbackMeter({ pull }) {
 }
 
 // ── Entry / SL / TP block — the order ticket, no confidence/tier labels ────────
-function Levels({ sig, dec }) {
-  const entry = num(sig.entry), stop = num(sig.stop), t1 = num(sig.t1), t2 = num(sig.t2);
-  if (entry == null || stop == null) return null;
-  const risk = Math.abs(entry - stop) || 1e-9;
+function Levels({ sig, dec, mode }) {
+  const entry = num(sig.entry);
+  if (entry == null) return null;
   const dir = sig.action === "SHORT" ? -1 : 1;
+  const atr = sig._ta && sig._ta.atr4h > 0 ? sig._ta.atr4h : null;
+  const isFade = !!sig._fade;
+  const M = SIGNAL_MODES[mode] || SIGNAL_MODES.day;
+  // Trend trade → recompute stop/targets for the SELECTED mode (instant, free).
+  // Range-fade → use the signal's own validated fade levels (mode never rescales a fade).
+  let stop, t1, t2;
+  if (isFade || !atr) { stop = num(sig.stop); t1 = num(sig.t1); t2 = num(sig.t2); }
+  else { const r = M.stopMult * atr; stop = entry - dir * r; t1 = entry + dir * M.t1 * r; t2 = entry + dir * M.t2 * r; }
+  if (stop == null) return null;
+  const risk = Math.abs(entry - stop) || 1e-9;
   const rMul = pr => pr == null ? null : ((pr - entry) * dir) / risk;
   const fp = v => v == null ? "—" : `$${Number(v).toFixed(dec)}`;
   const acct = (() => { try { const v = parseFloat(localStorage.getItem("sdg_acct")); return Number.isFinite(v) && v > 0 ? v : 10000; } catch (_) { return 10000; } })();
@@ -86,11 +95,9 @@ function Levels({ sig, dec }) {
   const eff = sig._verdict?.sizeMult && sig._verdict.sizeMult < 1 ? sig._verdict.sizeMult : 1;
   const ps = lotSizeFor("gold", risk, acct * (riskPct * eff) / 100);
   const dirCol = sig.action === "LONG" ? "#22c55e" : "#f87171";
-  const atr = sig._ta && sig._ta.atr4h > 0 ? sig._ta.atr4h : null;
 
   // Distance-first: every level shows its $ gap from entry (+ ×ATR), because gold
-  // feeds differ (cTrader ≠ TradingView ≠ our feed) and the difference isn't even
-  // constant. The DISTANCES transfer to any feed; the absolute price does not.
+  // feeds differ and the difference isn't even constant. Distances transfer; price doesn't.
   const Row = ({ label, price, col, isEntry }) => {
     const dist = price - entry, r = isEntry ? null : rMul(price);
     const sub = isEntry
@@ -110,8 +117,8 @@ function Levels({ sig, dec }) {
   return (
     <div style={{ ...card, marginBottom: 10, border: `1px solid ${dirCol}55` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        <span style={{ fontSize: 10, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>Trade Levels · {sig.action}</span>
-        <span style={{ ...mono, fontSize: 9, color: "#475569" }}>use the distances →</span>
+        <span style={{ fontSize: 10, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>Trade Levels · {sig.action}{isFade ? " · fade" : ""}</span>
+        <span style={{ ...mono, fontSize: 9, color: isFade ? "#c084fc" : "#475569" }}>{isFade ? "range-fade" : `${mode} · hold ${M.hold}`}</span>
       </div>
       <Row label="ENTRY" price={entry} col="#e2e8f0" isEntry />
       <Row label="SL" price={stop} col="#f87171" />
@@ -125,7 +132,7 @@ function Levels({ sig, dec }) {
         <span style={{ ...mono, fontSize: 11, color: "#64748b" }}>{riskPct}% risk · €{Number(acct).toLocaleString()}</span>
       </div>
       <p style={{ fontSize: 8, color: "#334155", margin: "8px 0 0", lineHeight: 1.5 }}>
-        Prices are our data feed's reference. Gold feeds differ slightly (and not by a fixed amount), so <b style={{ color: "#64748b" }}>enter at your own platform's live price and apply the $ distances / R above</b> — those hold on any feed. The stop width (1.5×ATR) and the 1R/2R targets are what matter, not the exact number.
+        Prices are our data feed's reference. Gold feeds differ (and not by a fixed amount), so <b style={{ color: "#64748b" }}>enter at your platform's live price and apply the $ distances / R</b> — those transfer to any feed.{isFade ? " Range-fade: fixed capped target, half size." : ` ${mode} profile: stop ${M.stopMult}×ATR, targets ${M.t1}R / ${M.t2}R.`}
       </p>
     </div>
   );
@@ -334,6 +341,10 @@ export default function GoldMinimal({
   }, [autoApply, shadows]);
   const gateThr = gate.tierThreshold ?? 2;
 
+  // Execution mode (scalp / day / swing) — same trend gate, different stop/target scale + hold.
+  const [mode, setModeState] = useState(() => getMode());
+  const changeMode = m => { setMode(m); setModeState(m); };
+
   // Structure reference levels for the chart (nearest S/R + prev-day close) — so
   // entry/SL/TP are seen against real market structure, not in a vacuum.
   const structureLevels = (() => {
@@ -395,7 +406,7 @@ export default function GoldMinimal({
           {call ? (
             <>
               <p style={{ ...mono, fontSize: 34, fontWeight: 800, letterSpacing: "0.06em", color: tone.fg, margin: 0, lineHeight: 1.1 }}>
-                {call.label === "TRADE" ? `${call.label} · ${sig.action}` : call.label}
+                {call.label === "TRADE" ? `${call.label} · ${sig.action}${sig._fade ? " · FADE" : ""}` : call.label}
               </p>
               {call.note && <p style={{ ...mono, fontSize: 11, color: "#94a3b8", margin: "8px 0 0", lineHeight: 1.5 }}>{call.note}</p>}
               {sig && <p style={{ ...mono, fontSize: 9, margin: "8px 0 0", color: sig._free ? "#475569" : "#22c55e" }}>{sig._free ? "○ free · local read (no live news)" : "✓ AI news-checked"}</p>}
@@ -403,6 +414,16 @@ export default function GoldMinimal({
           ) : (
             <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: "#475569", margin: 0 }}>— run a signal —</p>
           )}
+        </div>
+
+        {/* Execution mode — scalp / day / swing (same trend gate, different scale + hold) */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          {["scalp", "day", "swing"].map(m => (
+            <button key={m} onClick={() => changeMode(m)} title={`${m}: stop ${SIGNAL_MODES[m].stopMult}×ATR · targets ${SIGNAL_MODES[m].t1}R/${SIGNAL_MODES[m].t2}R · hold ${SIGNAL_MODES[m].hold}`} style={{
+              flex: 1, ...mono, fontSize: 10, padding: "7px 0", borderRadius: 8, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.06em",
+              background: mode === m ? "#1e293b" : "transparent", color: mode === m ? T.accentText : "#64748b", border: `1px solid ${mode === m ? T.accent : "#1e293b"}`,
+            }}>{m}</button>
+          ))}
         </div>
 
         {/* Learning + A/B + signal log (opt-in) */}
@@ -417,7 +438,7 @@ export default function GoldMinimal({
         {ta && <CollectiveRead ta={ta} />}
 
         {/* Trade levels (only on a real TRADE) */}
-        {actionable && <Levels sig={sig} dec={dec} />}
+        {actionable && <Levels sig={sig} dec={dec} mode={mode} />}
 
         {/* Pullback meter */}
         <PullbackMeter pull={ta?.pull} />
